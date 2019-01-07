@@ -29,15 +29,15 @@ from gurobipy import *
 def BranchBound(c,d,A,B,lb,ub,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj):
     # Global variables
     global var, obj  # optimization
-    global nd_dual, nd_flag, nd_j0, nd_j1, nd_obj  # node of search tree
+    #global nd_dual, nd_flag, nd_j0, nd_j1, nd_obj  # node of search tree
     var = var_in
     obj = obj_in
     # Solve the relaxed linear programming
     [lp_var,lp_obj,lp_flg,lp_dul] = Linprog(c,d,A,B,lb,ub)
     # Update global variabes for the current node in the search tree
-    nd_dual.append([lp_dul])  # dual variables
-    nd_flag.append([lp_flg])  # optimality flag
-    nd_obj. append([lp_obj])  # objective
+    nd_dual.append(lp_dul)  # dual variables
+    nd_flag.append(lp_flg)  # optimality flag
+    nd_obj. append(lp_obj)  # objective
     nd_j0.append(np.where(lb + ub == 0))  # index of x where branching has set xj to 0
     nd_j1.append(np.where(lb + ub == 2))  # index of x where branching has set xj to 1
     # Branching
@@ -56,8 +56,8 @@ def BranchBound(c,d,A,B,lb,ub,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj):
             if max(lp_gap) == 0:  # integer solution
                 var = lp_var  # update global variable
                 obj = lp_obj
-                var_out = lp_var  # update output
-                obj_out = lp_obj
+                var_out = var  # update output
+                obj_out = obj
                 flg_out = 1
             else:  # real solution
                 leaf = np.where(lp_gap > 0)  # index of leaf node for branching
@@ -69,13 +69,15 @@ def BranchBound(c,d,A,B,lb,ub,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj):
                     lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
                     BranchBound(c,d,A,B,lb_temp,ub,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj)
                 # The lower branch calculation
-                if lb[pick] >= np.floor(lp_var[pick]):
+                if lb[pick] <= np.floor(lp_var[pick]):
                     ub_temp[pick] = np.floor(lp_var[pick])  # branching
                     BranchBound(c,d,A,B,lb,ub_temp,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj)
+                # update output
+                var_out = var
+                obj_out = obj
+                flg_out = 1
     return [var_out,obj_out,flg_out,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj]
 
-    
-    
 
 # Solve the relaxed linear programming
 def Linprog(c,d,A,B,lb,ub):
@@ -126,6 +128,12 @@ ub = np.array([1,1,1,1,1,1])
 var_in = np.array([0,0,0,0,0,0])
 obj_in = np.array([100])
 
-[var,obj,_,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj] = BranchBound(c,d,A,B,lb,ub,var_in,obj_in,[],[],[],[],[])
+nd_dual = []
+nd_flag = []
+nd_j0 = []
+nd_j1 = []
+nd_obj = []
+
+[var,obj,_,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj] = BranchBound(c,d,A,B,lb,ub,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj)
 
 print(obj)
