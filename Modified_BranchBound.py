@@ -26,14 +26,55 @@ from gurobipy import *
 
 
 # Main function of Branch-and-Bound algorithm
-def BranchBound(c,d,A,B,lb,ub,var_in,obj_in):
+def BranchBound(c,d,A,B,lb,ub,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj):
     # Global variables
-    global var
-    global obj
+    global var, obj  # optimization
+    global nd_dual, nd_flag, nd_j0, nd_j1, nd_obj  # node of search tree
     var = var_in
     obj = obj_in
     # Solve the relaxed linear programming
     [lp_var,lp_obj,lp_flg,lp_dul] = Linprog(c,d,A,B,lb,ub)
+    # Update global variabes for the current node in the search tree
+    nd_dual.append([lp_dul])  # dual variables
+    nd_flag.append([lp_flg])  # optimality flag
+    nd_obj. append([lp_obj])  # objective
+    nd_j0.append(np.where(lb + ub == 0))  # index of x where branching has set xj to 0
+    nd_j1.append(np.where(lb + ub == 2))  # index of x where branching has set xj to 1
+    # Branching
+    if lp_flg != 1:  # if problem is infeasible
+        var_out = lp_var
+        obj_out = lp_obj
+        flg_out = -1
+    else:  # if problem is feasible
+        if lp_obj > obj:  # can't find any solution better than the current one
+            var_out = lp_var
+            obj_out = lp_obj
+            flg_out = -2
+        else:  # find a solution better than the current one
+            lp_var = np.array(lp_var)  # list to array
+            lp_gap = np.abs(lp_var - np.rint(lp_var))  # gap
+            if max(lp_gap) == 0:  # integer solution
+                var = lp_var  # update global variable
+                obj = lp_obj
+                var_out = lp_var  # update output
+                obj_out = lp_obj
+                flg_out = 1
+            else:  # real solution
+                leaf = np.where(lp_gap > 0)  # index of leaf node for branching
+                pick = int(leaf[0][0])  # pick up the first index
+                lb_temp = lb  # temporary lower bound
+                ub_temp = ub  # temporary upper bound
+                # The upper branch calculation
+                if ub[pick] >= np.floor(lp_var[pick]) + 1:
+                    lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
+                    BranchBound(c,d,A,B,lb_temp,ub,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj)
+                # The lower branch calculation
+                if lb[pick] >= np.floor(lp_var[pick]):
+                    ub_temp[pick] = np.floor(lp_var[pick])  # branching
+                    BranchBound(c,d,A,B,lb,ub_temp,var_in,obj_in,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj)
+    return [var_out,obj_out,flg_out,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj]
+
+    
     
 
 # Solve the relaxed linear programming
@@ -66,11 +107,11 @@ def Linprog(c,d,A,B,lb,ub):
     else:
         # Return feasibility solution
         n_eye = np.size(A,0) # number of new-added variables (eye matrix)
-        c  = np.append(np.zeros(n_var), np.ones(n_eye))
+        c  = np.append(np.zeros(n_var), np.ones(n_eye), axis = 0)
         A  = np.append(A,  np.eye(n_eye), axis = 1)
         lb = np.append(lb, np.zeros(n_eye))
         ub = np.append(ub, np.ones(n_eye) * 1e6)
-        [lp_var,lp_obj,lp_flg,lp_dul] = Linprog(c,d,A,B,lb,ub)
+        [lp_var,lp_obj,_,lp_dul] = Linprog(c,d,A,B,lb,ub)
         lp_flg = -1
     return lp_var,lp_obj,lp_flg,lp_dul
 
@@ -82,6 +123,9 @@ B  = np.array([5,4])
 lb = np.array([0,0,0,0,0,0])
 ub = np.array([1,1,1,1,1,1])
 
-[_,obj,_,_] = Linprog(c,d,A,B,lb,ub)
+var_in = np.array([0,0,0,0,0,0])
+obj_in = np.array([100])
+
+[var,obj,_,nd_dual,nd_flag,nd_j0,nd_j1,nd_obj] = BranchBound(c,d,A,B,lb,ub,var_in,obj_in,[],[],[],[],[])
 
 print(obj)
