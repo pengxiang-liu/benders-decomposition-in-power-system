@@ -74,8 +74,8 @@ class Parameter(object):
         Line = Data_origin[1]
         Year_line = 25  # life-time of line
         self.Line = Line
-        self.Line_ext = Line[:int(sum(Line[:,9])),:]  # existing line
-        self.Line_new = Line[int(sum(Line[:,9])):,:]  # expandable line
+        self.Line_ext = Line[np.where(Line[:,9] == 1)]  # existing line
+        self.Line_new = Line[np.where(Line[:,9] == 0)]  # expandable line
         self.Line_R = Line[:,4]  # resistence
         self.Line_X = Line[:,5]  # reactance
         self.Line_S_ext = Line[:,6]  # existing capacity
@@ -113,7 +113,7 @@ class Parameter(object):
         self.N_solar = len(Solar)
         self.Cost_cutsolar = 150  # cost of solar curtailment
         self.Solar_angle = 1.00  # phase angle of PV station output
-        self.Dep_Solar = Depreciation(Year_solar,self.Int_rate)
+        self.Dep_solar = Depreciation(Year_solar,self.Int_rate)
 
         # Typical data
         self.Typical_load  = Data_origin[5][:,1:]  # load
