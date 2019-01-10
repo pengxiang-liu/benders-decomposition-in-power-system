@@ -18,6 +18,7 @@ import xlrd
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+
 from gurobipy import *
 
 
@@ -318,9 +319,9 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
     # minimize
     #       Costs of power purchasing, load shedding, renewables generation and curtailment 
     # subject to
-    #       1) Optimal Power flow
-    #       2) Upper and lower bound
-    #       3) Reconfiguration
+    #       1) Reconfiguration
+    #       2) Optimal Power flow
+    #       3) Upper and lower bound
     #
     model = Model()
     global N_V_bus,  N_P_line, N_Q_line, N_P_sub, N_Q_sub
@@ -331,6 +332,9 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
     tp_load  = np.outer(Para.Load [:,t], Para.Typical_load [hour_0:hour_1,d])  # load
     tp_wind  = np.outer(Para.Wind [:,2], Para.Typical_wind [hour_0:hour_1,d])  # wind
     tp_solar = np.outer(Para.Solar[:,2], Para.Typical_solar[hour_0:hour_1,d])  # solar
+    # Capacity data
+    Cap_line = [Para.Line_S_ext[n] + Result_Planning.x_line[n][t] * Para.Line_S_new[n] for n in range(Para.N_line)]
+    Cap_sub  = [Para.Sub_S_ext [n] + Result_Planning.x_sub [n][t] * Para.Sub_S_new [n] for n in range(Para.N_sub )]
 
     # Create reconfiguration variables
     y_line  = model.addVars(Para.N_line, vtype = GRB.BINARY)  # line
@@ -364,12 +368,22 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
     model.setObjective(obj, GRB.MINIMIZE)
 
     # Constraint 1 (Reconfiguration)
+    N_load = np.size(np.nonzero(Para.Load[:,t]),1)
+    model.addConstr(quicksum(y_line[n] for n in range(Para.N_line)) == N_load)  # radiality
     for n in range(Para.N_line):
-        model.addConstr(y_line [n] >= 0)
-        model.addConstr(y_line [n] <= Result_Planning.x_line [n][t])
+        if n < Para.N_line_ext:
+            model.addConstr(y_line[n] >= 0)
+            model.addConstr(y_line[n] <= 1)
+        else:
+            model.addConstr(y_line[n] >= 0)
+            model.addConstr(y_line[n] <= Result_Planning.x_line[n][t])
     for n in range(Para.N_sub):
-        model.addConstr(y_sub  [n] >= 0)
-        model.addConstr(y_sub  [n] <= Result_Planning.x_sub  [n][t])
+        if n < Para.N_sub_ext:
+            model.addConstr(y_sub[n] >= 0)
+            model.addConstr(y_sub[n] <= 1)
+        else:
+            model.addConstr(y_sub[n] >= 0)
+            model.addConstr(y_sub[n] <= Result_Planning.x_sub[n][t])
     for n in range(Para.N_wind):
         model.addConstr(y_wind [n] >= 0)
         model.addConstr(y_wind [n] <= Result_Planning.x_wind [n][t])
@@ -429,18 +443,18 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
         # 5.Linearization of quadratic terms
         for n in range(Para.N_line):
             expr = Var[N_P_line + n, h] + Var[N_Q_line + n, h]
-            model.addConstr(expr >= -math.sqrt(2) * (Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
-            model.addConstr(expr <=  math.sqrt(2) * (Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
+            model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
+            model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
             expr = Var[N_P_line + n, h] - Var[N_Q_line + n, h]
-            model.addConstr(expr >= -math.sqrt(2) * (Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
-            model.addConstr(expr <=  math.sqrt(2) * (Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
+            model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
+            model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
         for n in range(Para.N_sub):
             expr = Var[N_P_sub + n, h] + Var[N_Q_sub + n, h]
-            model.addConstr(expr >= -math.sqrt(2) * (Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
-            model.addConstr(expr <=  math.sqrt(2) * (Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
+            model.addConstr(expr >= -math.sqrt(2) * y_sub[n] * Cap_sub[n])
+            model.addConstr(expr <=  math.sqrt(2) * y_sub[n] * Cap_sub[n])
             expr = Var[N_P_sub + n, h] - Var[N_Q_sub + n, h]
-            model.addConstr(expr >= -math.sqrt(2) * (Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
-            model.addConstr(expr <=  math.sqrt(2) * (Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
+            model.addConstr(expr >= -math.sqrt(2) * y_sub[n] * Cap_sub[n])
+            model.addConstr(expr <=  math.sqrt(2) * y_sub[n] * Cap_sub[n])
     
     # Constraint 3 (bounds of variables)
     for h in range(Para.N_hour):
@@ -450,16 +464,16 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
             model.addConstr(Var[N_V_bus + n, h] <= Para.Voltage_upp ** 2)
         # 2.Power flow
         for n in range(Para.N_line):
-            model.addConstr(Var[N_P_line + n, h] >= -(Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
-            model.addConstr(Var[N_P_line + n, h] <=  (Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
-            model.addConstr(Var[N_Q_line + n, h] >= -(Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
-            model.addConstr(Var[N_Q_line + n, h] <=  (Para.Line_S_ext[n] + y_line[n] * Para.Line_S_new[n]))
+            model.addConstr(Var[N_P_line + n, h] >= -y_line[n] * Cap_line[n])
+            model.addConstr(Var[N_P_line + n, h] <=  y_line[n] * Cap_line[n])
+            model.addConstr(Var[N_Q_line + n, h] >= -y_line[n] * Cap_line[n])
+            model.addConstr(Var[N_Q_line + n, h] <=  y_line[n] * Cap_line[n])
         # 3.Substation
         for n in range(Para.N_sub):
-            model.addConstr(Var[N_P_sub + n, h] >= -(Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
-            model.addConstr(Var[N_P_sub + n, h] <=  (Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
-            model.addConstr(Var[N_Q_sub + n, h] >= -(Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
-            model.addConstr(Var[N_Q_sub + n, h] <=  (Para.Sub_S_ext[n] + y_sub[n] * Para.Sub_S_new[n]))
+            model.addConstr(Var[N_P_sub + n, h] >= 0)
+            model.addConstr(Var[N_P_sub + n, h] <= y_sub[n] * Cap_sub[n])
+            model.addConstr(Var[N_Q_sub + n, h] >= 0)
+            model.addConstr(Var[N_Q_sub + n, h] <= y_sub[n] * Cap_sub[n])
         # 4.Load shedding
         for n in range(Para.N_bus):
             model.addConstr(Var[N_C_load + n, h] >= 0)
@@ -522,6 +536,7 @@ def PlotSolution(Para,Result):
 
 
 if __name__ == "__main__":
+
     time_start=time.time()
     # Input parameter
     filename = "../data/Data-IEEE-24.xlsx"
@@ -536,6 +551,6 @@ if __name__ == "__main__":
     for t in range(Para.N_stage):
         for d in range(Para.N_day):
             for s in range(Para.N_scenario):
-                [_,Result_Reconfig] = Reconfiguration(Para,Info,Result_Planning,t,d,s)
+                [Result_Reconfig,Result_Reconfig_Dual] = Reconfiguration(Para,Info,Result_Planning,2,2,2)
     time_end=time.time()
     print('totally cost',time_end-time_start)
