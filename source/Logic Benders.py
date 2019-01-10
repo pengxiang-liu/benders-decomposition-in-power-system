@@ -15,6 +15,7 @@
 import sys
 import math
 import xlrd
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from gurobipy import *
@@ -167,10 +168,10 @@ class ResultReconfigDual(object):
         N_y_wind  = N_y_sub  + Para.N_sub
         N_y_solar = N_y_wind + Para.N_wind
         constrs = model.getConstrs()
-        self.dual_line = [constrs[N_y_line  + i].pi for i in range(Para.N_line )]
-        self.sual_sub  = [constrs[N_y_sub   + i].pi for i in range(Para.N_sub  )]
-        self.dual_wind = [constrs[N_y_wind  + i].pi for i in range(Para.N_wind )]
-        self.dual_wind = [constrs[N_y_solar + i].pi for i in range(Para.N_solar)]
+        self.dual_line  = [constrs[N_y_line  + i].pi for i in range(Para.N_line )]
+        self.sual_sub   = [constrs[N_y_sub   + i].pi for i in range(Para.N_sub  )]
+        self.dual_wind  = [constrs[N_y_wind  + i].pi for i in range(Para.N_wind )]
+        self.dual_solar = [constrs[N_y_solar + i].pi for i in range(Para.N_solar)]
 
 
 # This function input data from Excel files. The filtname can be changed to other
@@ -481,16 +482,17 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
         result = ResultReconfig(model,Para,y_line,y_sub,y_wind,y_solar,Var)
         N_cons = model.getAttr(GRB.Attr.NumConstrs)
         # Fix binary reconfiguration variables
-        copy.addConstrs(y_line [n] == result.y_line [n] for n in range(Para.N_line ))
+        model.addConstrs(y_line [n] == result.y_line [n] for n in range(Para.N_line ))
         model.addConstrs(y_sub  [n] == result.y_sub  [n] for n in range(Para.N_sub  ))
         model.addConstrs(y_wind [n] == result.y_wind [n] for n in range(Para.N_wind ))
         model.addConstrs(y_solar[n] == result.y_solar[n] for n in range(Para.N_solar))
+        model.update()  # update all changes
         # Relax
-        model = model.relax()
+        model = model.relax()  # relax binary variables to continuous variables
         model.optimize()
         if model.status == GRB.Status.OPTIMAL:
-            result = ResultReconfigDual(model,Para,N_cons)
-    return result
+            result_dual = ResultReconfigDual(model,Para,N_cons)
+    return result, result_dual
 
 
 # This function plots the planning solution
@@ -520,7 +522,7 @@ def PlotSolution(Para,Result):
 
 
 if __name__ == "__main__":
-
+    time_start=time.time()
     # Input parameter
     filename = "../data/Data-IEEE-24.xlsx"
     [Para,Info] = ReadData(filename)
@@ -534,4 +536,6 @@ if __name__ == "__main__":
     for t in range(Para.N_stage):
         for d in range(Para.N_day):
             for s in range(Para.N_scenario):
-                Result_Reconfig = Reconfiguration(Para,Info,Result_Planning,t,d,s)
+                [_,Result_Reconfig] = Reconfiguration(Para,Info,Result_Planning,t,d,s)
+    time_end=time.time()
+    print('totally cost',time_end-time_start)
