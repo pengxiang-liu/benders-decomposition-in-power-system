@@ -37,8 +37,8 @@ class Parameter(object):
         self.Int_rate = 0.05  # interest rate
         self.Big_M = 500  # Big M
         self.Voltage = 35
-        self.Voltage_low = 35 * 0.9
-        self.Voltage_upp = 35 * 1.1
+        self.Voltage_low = 35 * 0.95
+        self.Voltage_upp = 35 * 1.05
         # Bus data
         Bus = Data_origin[0]
         self.Bus = Bus
@@ -142,17 +142,14 @@ class ResultPlanning(object):
 
 # This class restores the results of reconfiguration sub-problem
 class ResultReconfig(object):
-    def __init__(self,model,Para,y_line,y_sub,y_wind,y_solar,f_line,f_load,f_sub,Var):
+    def __init__(self,model,Para,y_line,y_pos,y_neg,y_sub,y_wind,y_solar,Var):
         # Reconfiguration variable
         self.y_line  = [int(y_line [i].x) for i in range(Para.N_line )]
+        self.y_pos   = [int(y_pos  [i].x) for i in range(Para.N_line )]
+        self.y_neg   = [int(y_neg  [i].x) for i in range(Para.N_line )]
         self.y_sub   = [int(y_sub  [i].x) for i in range(Para.N_sub  )]
         self.y_wind  = [int(y_wind [i].x) for i in range(Para.N_wind )]
         self.y_solar = [int(y_solar[i].x) for i in range(Para.N_solar)]
-        # Fictitious power flow
-        # Reconfiguration variable
-        self.f_line  = [int(f_line [i].x) for i in range(Para.N_line )]
-        self.f_load  = [int(f_load [i].x) for i in range(Para.N_bus  )]
-        self.f_sub   = [int(f_sub  [i].x) for i in range(Para.N_sub  )]
         # Power flow variable
         self.V_bus   = [[Var[N_V_bus   + i,j].x for j in range(Para.N_hour)] for i in range(Para.N_bus  )]
         self.P_line  = [[Var[N_P_line  + i,j].x for j in range(Para.N_hour)] for i in range(Para.N_line )]
@@ -325,12 +322,10 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
     #       Costs of power purchasing, load shedding, renewables generation and curtailment 
     # subject to
     #       1) Reconfiguration
-    #       2) Fictitious power flow
+    #       2) Radial topology
     #       3) Optimal Power flow
     #       4) Upper and lower bound
     #
-    for n in range(Para.N_line):
-        Result_Planning.x_line[n][t] = 1
     model = Model()
     global N_V_bus,  N_P_line, N_Q_line, N_P_sub, N_Q_sub
     global N_C_load, N_S_wind, N_C_wind, N_S_solar, N_C_solar
@@ -346,13 +341,11 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
 
     # Create reconfiguration variables
     y_line  = model.addVars(Para.N_line, vtype = GRB.BINARY)  # line
+    y_pos   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # positive line flow
+    y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
     y_sub   = model.addVars(Para.N_sub,  vtype = GRB.BINARY)  # Substation
     y_wind  = model.addVars(Para.N_wind, vtype = GRB.BINARY)  # Wind farm
     y_solar = model.addVars(Para.N_solar,vtype = GRB.BINARY)  # PV station
-    # Create fictitious variables
-    f_line  = model.addVars(Para.N_line, lb = -GRB.INFINITY)  # line flow
-    f_load  = model.addVars(Para.N_bus,  lb = -GRB.INFINITY)  # load demand
-    f_sub   = model.addVars(Para.N_sub,  lb = -GRB.INFINITY)  # power input
     # Create power flow variables
     N_V_bus   = 0  # Square of bus voltage
     N_P_line  = N_V_bus   + Para.N_bus    # Active power flow of line
@@ -401,30 +394,21 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
         model.addConstr(y_solar[n] >= 0)
         model.addConstr(y_solar[n] <= Result_Planning.x_solar[n][t])
 
-    # Constraint 2 (radial topology)
-    for n in range(Para.N_line):
-        model.addConstr(f_line[n] >= -50 * y_line[n])
-        model.addConstr(f_line[n] <=  50 * y_line[n])
-    for n in range(Para.N_bus):
-        if Para.Load[n][t] == 0:
-            model.addConstr(f_load[n] == 0)
-        else:
-            model.addConstr(f_load[n] == 1)
-    for n in range(Para.N_sub):
-        model.addConstr(f_sub[n] >= 0)
-        model.addConstr(f_sub[n] <= 50 * y_sub[n])
+    # Constraint 2 (Radial topology)
     for n in range(Para.N_bus):
         line_head = Info.Line_head[n]
         line_tail = Info.Line_tail[n]
-        expr = quicksum(f_line[i] for i in line_head) - quicksum(f_line[i] for i in line_tail)
-        if Info.Sub[n] == []:
-            model.addConstr(expr + f_load[n] == 0)
+        expr = quicksum(y_pos[i] for i in line_tail) + quicksum(y_neg[i] for i in line_head)
+        if Info.Sub[n] != []:  # substation bus
+            model.addConstr(expr == 0)
         else:
-            model.addConstr(expr + f_load[n] == f_sub[int(Info.Sub[n][0])])
-    N_load = np.size(np.nonzero(Para.Load[:,t]),1)
-    model.addConstr(quicksum(y_line[n] for n in range(Para.N_line)) == N_load)  # radiality
+            if Para.Load[n,t] > 0:  # load bus
+                model.addConstr(expr == 1)
+            else:  # none load bus
+                model.addConstr(expr <= 1)
+    model.addConstrs(y_pos[n] + y_neg[n] == y_line[n] for n in range(Para.N_line))
 
-    # Constraint 2 (optimal power flow)
+    # Constraint 3 (optimal power flow)
     for h in range(Para.N_hour):
         # 1.Active power balance equation
         for n in range(Para.N_bus):
@@ -489,7 +473,7 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
             model.addConstr(expr >= -math.sqrt(2) * y_sub[n] * Cap_sub[n])
             model.addConstr(expr <=  math.sqrt(2) * y_sub[n] * Cap_sub[n])
     
-    # Constraint 3 (bounds of variables)
+    # Constraint 4 (bounds of variables)
     for h in range(Para.N_hour):
         # 1.Voltage
         for n in range(Para.N_bus):
@@ -526,7 +510,7 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultReconfig(model,Para,y_line,y_sub,y_wind,y_solar,f_line,f_load,f_sub,Var)
+        result = ResultReconfig(model,Para,y_line,y_pos,y_neg,y_sub,y_wind,y_solar,Var)
         N_cons = model.getAttr(GRB.Attr.NumConstrs)
         # Fix binary reconfiguration variables
         model.addConstrs(y_line [n] == result.y_line [n] for n in range(Para.N_line ))
@@ -539,7 +523,6 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
         model.optimize()
         if model.status == GRB.Status.OPTIMAL:
             result_dual = ResultReconfigDual(model,Para,N_cons)
-    PlotReconfiguration(Para,result.y_line)
     return result, result_dual
 
 
@@ -611,6 +594,6 @@ if __name__ == "__main__":
     for t in range(Para.N_stage):
         for d in range(Para.N_day):
             for s in range(Para.N_scenario):
-                [Result_Reconfig,Result_Reconfig_Dual] = Reconfiguration(Para,Info,Result_Planning,2,2,2)
+                [Result_Reconfig,Result_Reconfig_Dual] = Reconfiguration(Para,Info,Result_Planning,t,d,s)
     time_end=time.time()
     print('totally cost',time_end-time_start)
