@@ -165,14 +165,30 @@ class ResultReconfig(object):
 
 # This class restores the results of reconfiguration sub-problem
 class ResultReconfigDual(object):
-    def __init__(self,model,Para,N_cons):
+    def __init__(self,model,Para,N_cons,result):
+        # Model result
+        self.y_line  = result.y_line
+        self.y_pos   = result.y_pos
+        self.y_neg   = result.y_neg
+        self.y_line  = result.y_line
+        self.y_sub   = result.y_sub
+        self.y_wind  = result.y_wind
+        self.y_solar = result.y_solar
+        self.obj = (model.getObjective()).getValue()
+        # Dual information
         N_y_line  = N_cons
-        N_y_sub   = N_y_line + Para.N_line
-        N_y_wind  = N_y_sub  + Para.N_sub
-        N_y_solar = N_y_wind + Para.N_wind
+        N_y_pos   = N_y_line  + Para.N_line
+        N_y_neg   = N_y_pos   + Para.N_line
+        N_y_sub   = N_y_neg   + Para.N_line
+        N_y_wind  = N_y_sub   + Para.N_sub
+        N_y_solar = N_y_wind  + Para.N_wind
+        N_dual    = N_y_solar + Para.N_solar
         constrs = model.getConstrs()
+        self.dual = [constrs[N_cons + i].pi for i in range(N_dual - N_cons)]
         self.dual_line  = [constrs[N_y_line  + i].pi for i in range(Para.N_line )]
-        self.sual_sub   = [constrs[N_y_sub   + i].pi for i in range(Para.N_sub  )]
+        self.dual_pos   = [constrs[N_y_pos   + i].pi for i in range(Para.N_line )]
+        self.dual_neg   = [constrs[N_y_neg   + i].pi for i in range(Para.N_line )]
+        self.dual_sub   = [constrs[N_y_sub   + i].pi for i in range(Para.N_sub  )]
         self.dual_wind  = [constrs[N_y_wind  + i].pi for i in range(Para.N_wind )]
         self.dual_solar = [constrs[N_y_solar + i].pi for i in range(Para.N_solar)]
 
@@ -316,7 +332,7 @@ def Planning(Para,Info):
 # analysis and operation. Note that the problem is formulated under a given scenario 's' of 
 # typical day 'd' at stage 't'.
 #
-def Reconfiguration(Para,Info,Result_Planning,t,d,s):
+def Reconfig(Para,Info,Result_Planning,t,d,s):
     #
     # minimize
     #       Costs of power purchasing, load shedding, renewables generation and curtailment 
@@ -399,13 +415,10 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
         line_head = Info.Line_head[n]
         line_tail = Info.Line_tail[n]
         expr = quicksum(y_pos[i] for i in line_tail) + quicksum(y_neg[i] for i in line_head)
-        if Info.Sub[n] != []:  # substation bus
+        if Para.Load[n,t] > 0:  # load bus
+            model.addConstr(expr == 1)
+        else:  # none load bus
             model.addConstr(expr == 0)
-        else:
-            if Para.Load[n,t] > 0:  # load bus
-                model.addConstr(expr == 1)
-            else:  # none load bus
-                model.addConstr(expr <= 1)
     model.addConstrs(y_pos[n] + y_neg[n] == y_line[n] for n in range(Para.N_line))
 
     # Constraint 3 (optimal power flow)
@@ -514,6 +527,8 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
         N_cons = model.getAttr(GRB.Attr.NumConstrs)
         # Fix binary reconfiguration variables
         model.addConstrs(y_line [n] == result.y_line [n] for n in range(Para.N_line ))
+        model.addConstrs(y_pos  [n] == result.y_pos  [n] for n in range(Para.N_line ))
+        model.addConstrs(y_neg  [n] == result.y_neg  [n] for n in range(Para.N_line ))
         model.addConstrs(y_sub  [n] == result.y_sub  [n] for n in range(Para.N_sub  ))
         model.addConstrs(y_wind [n] == result.y_wind [n] for n in range(Para.N_wind ))
         model.addConstrs(y_solar[n] == result.y_solar[n] for n in range(Para.N_solar))
@@ -522,8 +537,201 @@ def Reconfiguration(Para,Info,Result_Planning,t,d,s):
         model = model.relax()  # relax binary variables to continuous variables
         model.optimize()
         if model.status == GRB.Status.OPTIMAL:
-            result_dual = ResultReconfigDual(model,Para,N_cons)
-    return result, result_dual
+            result_dual = ResultReconfigDual(model,Para,N_cons,result)
+    return result_dual
+
+
+# This function creates a relaxed reconfiguration 0-1 problem with pure binary variables.
+# The optimal power flow problem is integrated in a traditional Benders cut. The model is
+# rewritten in a standard form for logic-based Benders decomposition. The model is solved
+# by a costumized branch-and-bound algorithm.
+#
+def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,t,d,s):
+    #
+    # minimize
+    #       c * y + d
+    # subject to 
+    #       A * y >= B     (u)
+    #       lb <= y <= ub  (v)
+    #       (Reconfiguration constraints)
+    #
+    # Indexing variables
+    N_y_line  = 0
+    N_y_pos   = N_y_line  + Para.N_line
+    N_y_neg   = N_y_pos   + Para.N_line
+    N_y_sub   = N_y_neg   + Para.N_line
+    N_y_wind  = N_y_sub   + Para.N_sub
+    N_y_solar = N_y_wind  + Para.N_wind
+    N_Var     = N_y_solar + Para.N_solar
+
+    # Formulate objective matrics
+    c = Result_Reconfig.dual
+    c = np.array(c)
+    d = Result_Reconfig.obj
+    for n in range(Para.N_line):
+        d = d - Result_Reconfig.dual_line [n] * Result_Reconfig.y_line [n]
+        d = d - Result_Reconfig.dual_pos  [n] * Result_Reconfig.y_pos  [n]
+        d = d - Result_Reconfig.dual_neg  [n] * Result_Reconfig.y_neg  [n]
+    for n in range(Para.N_sub):
+        d = d - Result_Reconfig.dual_sub  [n] * Result_Reconfig.y_sub  [n]
+    for n in range(Para.N_wind):
+        d = d - Result_Reconfig.dual_wind [n] * Result_Reconfig.y_wind [n]
+    for n in range(Para.N_solar):
+        d = d - Result_Reconfig.dual_solar[n] * Result_Reconfig.y_solar[n]
+    d = np.array(d)
+
+    # Formulate constraint matrics
+    A = np.eye(N_Var)  # reconfiguration
+    for n in range(Para.N_bus):  # radial topology
+        A_temp = np.zeros(N_Var)
+        line_head = Info.Line_head[n]
+        line_tail = Info.Line_tail[n]
+        for i in line_tail:
+            A_temp[N_y_pos + i] = 1
+        for i in line_head:
+            A_temp[N_y_neg + i] = 1
+        A = np.append(A, [A_temp], axis = 0)
+    B = np.ones(N_Var)
+    for n in range(Para.N_line):
+        if n >= Para.N_line_ext:
+            B[N_y_line + n] = Result_Planning.x_line[n][t]
+    for n in range(Para.N_sub):
+        if n >= Para.N_sub_ext:
+            B[N_y_sub  + n] = Result_Planning.x_sub[n][t]
+    for n in range(Para.N_wind):
+        B[N_y_wind  + n] = Result_Planning.x_wind[n][t]
+    for n in range(Para.N_solar):
+        B[N_y_solar + n] = Result_Planning.x_solar[n][t]
+    for n in range(Para.N_bus):
+        if Para.Load[n,t] > 0:
+            B = np.append(B,1)
+        else:
+            B = np.append(B,0)
+    lb = np.zeros(N_Var)
+    ub = np.ones(N_Var)
+    [var_out,obj_out,flg_out,dual,flag,j0,j1,fit] = BranchBound(c,d,A,B,lb,ub)
+    return d
+
+
+# This program solves 0-1 programming based on a classical Branch-and-Bound algorithm
+# Dual information from the relaxed linear programming at each leaf node is returned
+# 
+def BranchBound(c,d,A,B,lb,ub,br = 0):
+    # 
+    # The model has the following format:
+    # 
+    # minimize
+    #       c * x + d
+    # subject to 
+    #       A * x >= B     (u)
+    #       lb <= x <= ub  (v)
+    # where x is binary varibale, u and v are dual variables
+    #
+    # Global variables
+    global var, obj  # optimization
+    global dual, flag, j0, j1, fit  # node of search tree
+    if br == 0:  # initialization
+        var  = np.zeros(len(c))  # all zero
+        obj  = float("inf")  # python infinity
+        dual = []  # dual variables 
+        flag = []  # optimality flag
+        fit  = []  # fitness
+        j0   = []  # index of x where branching has set xj to 0
+        j1   = []  # index of x where branching has set xj to 1
+    # Solve the relaxed linear programming
+    [lp_var,lp_obj,lp_flg,lp_dul] = Linprog(c,d,A,B,lb,ub)
+    # Update global variabes for the current node in the search tree
+    dual.append(lp_dul)
+    flag.append(lp_flg)
+    fit. append(lp_obj)
+    j0.  append(np.where(lb + ub == 0))  # lb == 0 and ub == 0
+    j1.  append(np.where(lb + ub == 2))  # lb == 1 and ub == 1
+    # Branching
+    if lp_flg != 1:  # if problem is infeasible
+        var_out = lp_var
+        obj_out = lp_obj
+        flg_out = -1
+    else:  # if problem is feasible
+        if lp_obj > obj:  # can't find any solution better than the current one
+            var_out = lp_var
+            obj_out = lp_obj
+            flg_out = -2
+        else:  # find a solution better than the current one
+            lp_var = np.array(lp_var)  # list to array
+            lp_gap = np.abs(lp_var - np.rint(lp_var))  # gap
+            if max(lp_gap) == 0:  # integer solution
+                var = lp_var  # update global variable
+                obj = lp_obj
+                var_out = var  # update output
+                obj_out = obj
+                flg_out = 1
+            else:  # real solution
+                leaf = np.where(lp_gap > 0)  # index of leaf node for branching
+                pick = int(leaf[0][0])  # pick up the first index
+                lb_temp = lb  # temporary lower bound
+                ub_temp = ub  # temporary upper bound
+                # The upper branch calculation
+                if ub[pick] >= np.floor(lp_var[pick]) + 1:
+                    lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
+                    BranchBound(c,d,A,B,lb_temp,ub,1)
+                # The lower branch calculation
+                if lb[pick] <= np.floor(lp_var[pick]):
+                    ub_temp[pick] = np.floor(lp_var[pick])  # branching
+                    BranchBound(c,d,A,B,lb,ub_temp,1)
+                # update output
+                var_out = var
+                obj_out = obj
+                flg_out = 1
+    # Return results
+    return [var_out,obj_out,flg_out,dual,flag,j0,j1,fit]
+
+
+# This program solves a simple linear programming by Gurobi 8.1.0
+# 
+def Linprog(c,d,A,B,lb,ub):
+    # 
+    # minimize
+    #       c * x + d
+    # subject to 
+    #       A * x >= B     (u)
+    #       lb <= x <= ub  (v)
+    # where u and v are dual variables
+    #
+    model = Model()
+    # Create variables
+    n_var = np.size(A,1) # number of x
+    x = model.addVars(n_var)
+    # Set objective
+    obj = quicksum(c[i] * x[i] for i in range(n_var)) + d
+    model.setObjective(obj, GRB.MINIMIZE)
+    # Add constraints
+    for i in range(np.size(A,0)):
+        model.addConstr(quicksum(A[i][j] * x[j] for j in range(n_var)) >= B[i])
+    for i in range(n_var):
+        model.addConstr(x[i] >= lb[i])
+        model.addConstr(x[i] <= ub[i])
+    # Solve
+    model.Params.OutputFlag = 0  # turn off the display
+    model.optimize()
+    # Return
+    if model.status == GRB.Status.OPTIMAL:
+        # Return optimal solution
+        lp_var = [x[i].x for i in range(n_var)] # solution
+        lp_obj = obj.getValue() # objective
+        lp_flg = 1 # feasible
+        # Return dual variables
+        constrs = model.getConstrs() # get constraints
+        lp_dul  = [constrs[i].pi for i in range(np.size(A,0))] # dual variable
+    else:
+        # Return feasibility solution
+        n_eye = np.size(A,0) # number of new-added variables (eye matrix)
+        c  = np.append(np.zeros(n_var), np.ones(n_eye), axis = 0)
+        A  = np.append(A,  np.eye(n_eye), axis = 1)
+        lb = np.append(lb, np.zeros(n_eye))
+        ub = np.append(ub, np.ones(n_eye) * float("inf"))
+        [lp_var,lp_obj,_,lp_dul] = Linprog(c,d,A,B,lb,ub)
+        lp_flg = -1
+    return [lp_var,lp_obj,lp_flg,lp_dul]
 
 
 # This function plots the planning solution in all stages
@@ -594,6 +802,7 @@ if __name__ == "__main__":
     for t in range(Para.N_stage):
         for d in range(Para.N_day):
             for s in range(Para.N_scenario):
-                [Result_Reconfig,Result_Reconfig_Dual] = Reconfiguration(Para,Info,Result_Planning,t,d,s)
+                Result_Reconfig = Reconfig(Para,Info,Result_Planning,t,d,s)
+                Result_Reconfig_RLP = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,t,d,s)
     time_end=time.time()
     print('totally cost',time_end-time_start)
