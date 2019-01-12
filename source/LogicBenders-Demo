@@ -184,6 +184,27 @@ class ResultReconfigDual(object):
 
 
 # This class restores the results of reconfiguration sub-problem
+class ResultReconfigRelax(object):
+    def __init__(self,c,d,A,B,a,result):
+        # model
+        self.c = c
+        self.d = d
+        self.A = A
+        self.B = B
+        self.a = a
+        # Final solution
+        self.var = result.var  # variable
+        self.obj = result.obj  # objective
+        self.flg = result.flg  # optimality status
+        # Dual information
+        self.d_var = result.d_var  # dual variables
+        self.d_flg = result.d_flg  # flag
+        self.d_j0  = result.d_j0   # j0
+        self.d_j1  = result.d_j1   # j1
+        self.d_fit = result.d_fit  # fitness
+
+
+# This class restores the results of reconfiguration sub-problem
 class ResultBranchBound(object):
     def __init__(self,var_out,obj_out,flg_out,dual,flag,j0,j1,fit):
         # Final solution
@@ -568,7 +589,6 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
     # Formulate objective matrics
     c = np.array(Result_Reconfig.y_dual)
     d = Result_Reconfig.obj - np.inner(c,np.array(Result_Reconfig.y_star))
-
     # Formulate constraint matrics
     A = np.eye(N_y_var)  # reconfiguration
     A = A[0:N_cons[0],:]
@@ -587,7 +607,6 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
         A_temp[N_y_neg  + n] =  1
         A_temp[N_y_line + n] = -1
         A = np.append(A, [A_temp], axis = 0)
-    
     # Right-hand side value
     rhs = np.array(Result_Reconfig.rhs)  # value
     # Right-hand side constant a
@@ -606,13 +625,12 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
         B[N_x_line + n, N_x_line + n] = 0
     for n in range(Para.N_sub_ext ):
         B[N_x_sub  + n, N_x_sub  + n] = 0
-    
     # Bounds
     lb  = np.zeros(N_y_var)
     ub  = np.ones (N_y_var)
-
     # Optimize
-    result = BranchBound(c,d,A,rhs,lb,ub)
+    Result_BranchBound = BranchBound(c,d,A,rhs,lb,ub)
+    result = ResultReconfigRelax(c,d,A,B,a,Result_BranchBound)
     return result
 
 
@@ -803,11 +821,11 @@ if __name__ == "__main__":
     Result_Planning = Planning(Para,Info)
 
     # PlotPlanning(Para,Result_Planning.x_line)
-
+    LogicInfo = []
     for s in range(Para.N_scenario):
         Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
-        Result_Reconfig_RLP = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s)
-    
+        Result_RLP = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s)
+        LogicInfo.append(Result_RLP)
     # PlotReconfiguration(Para,Result_Reconfig.y_line)
     
     time_end=time.time()
