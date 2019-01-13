@@ -178,7 +178,7 @@ class ResultReconfigDual(object):
         # Dual information for logic-Benders
         constr = model.getConstrs()
         self.N_cons = N_cons
-        self.rhs = [constr[i].rhs for i in range(0,N_cons[1])]
+        self.rhs    = [constr[i].rhs for i in range(N_cons[-1])]
         self.y_star = [constr[i].rhs for i in range(N_cons[-2],N_cons[-1])]
         self.y_dual = [constr[i].pi  for i in range(N_cons[-2],N_cons[-1])]
 
@@ -600,19 +600,25 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
             A_temp[N_y_pos + i] = 1
         for i in line_head:
             A_temp[N_y_neg + i] = 1
-        A = np.append(A, [A_temp], axis = 0)
+        A = np.append(A, [ A_temp], axis = 0)  #  expr >=  1
+        A = np.append(A, [-A_temp], axis = 0)  # -expr >= -1
     for n in range(Para.N_line):  # y_pos & y_neg
         A_temp = np.zeros(N_y_var)
         A_temp[N_y_pos  + n] =  1
         A_temp[N_y_neg  + n] =  1
         A_temp[N_y_line + n] = -1
-        A = np.append(A, [A_temp], axis = 0)
+        A = np.append(A, [ A_temp], axis = 0)  #  expr >=  0
+        A = np.append(A, [-A_temp], axis = 0)  # -expr >= -0
     # Right-hand side value
-    rhs = np.array(Result_Reconfig.rhs)  # value
+    rhs = np.array(Result_Reconfig.rhs[0:N_cons[0]])  # value
+    for n in range(N_cons[0],N_cons[1]):
+        rhs = np.append(rhs,  Result_Reconfig.rhs[n])
+        rhs = np.append(rhs, -Result_Reconfig.rhs[n])
     # Right-hand side constant a
     a = np.zeros(N_cons[0])  # constant
     for n in range(N_cons[0],N_cons[1]):
-        a = np.append(a, Result_Reconfig.rhs[n])
+        a = np.append(a,  Result_Reconfig.rhs[n])
+        a = np.append(a, -Result_Reconfig.rhs[n])
     for n in range(Para.N_line_ext):
         a[N_x_line + n] = 1
     for n in range(Para.N_sub_ext ):
@@ -620,6 +626,7 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
     # Right-hand side coeficient matrix B
     B = -np.eye(N_x_var)
     for n in range(N_cons[0],N_cons[1]):
+        B = np.append(B, [np.zeros(N_x_var)], axis = 0)
         B = np.append(B, [np.zeros(N_x_var)], axis = 0)
     for n in range(Para.N_line_ext):
         B[N_x_line + n, N_x_line + n] = 0
