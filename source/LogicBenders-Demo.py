@@ -621,11 +621,11 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
         a = np.append(a,  Result_Reconfig.rhs[n])
         a = np.append(a, -Result_Reconfig.rhs[n])
     for n in range(Para.N_line_ext):
-        a[N_x_line + n] = 1
+        a[N_x_line + n] = -1
     for n in range(Para.N_sub_ext ):
-        a[N_x_sub  + n] = 1
+        a[N_x_sub  + n] = -1
     # Right-hand side coeficient matrix B
-    B = -np.eye(N_x_var)
+    B = np.eye(N_x_var)
     for n in range(N_cons[0],N_cons[1]):
         B = np.append(B, [np.zeros(N_x_var)], axis = 0)
         B = np.append(B, [np.zeros(N_x_var)], axis = 0)
@@ -636,6 +636,7 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
     # Bounds
     lb  = np.zeros(N_y_var)
     ub  = np.ones (N_y_var)
+
     # Optimize
     Result_BranchBound = BranchBound(c,d,A,rhs,lb,ub)
     result = ResultReconfigRelax(c,d,A,B,a,Result_BranchBound)
