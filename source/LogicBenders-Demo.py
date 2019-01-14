@@ -33,7 +33,7 @@ class Parameter(object):
         self.N_year_of_stage = 15
         self.N_day = 1  # number of typical day
         self.N_day_season = 365  # number of days in each season
-        self.N_scenario = 2  # number of reconfiguration in a day
+        self.N_scenario = 1  # number of reconfiguration in a day
         self.N_hour = int(24/self.N_scenario)  # number of hour in a scenario
         self.Int_rate = 0.05  # interest rate
         self.Big_M = 500  # Big M
@@ -134,11 +134,14 @@ class BusInfo(object):
 
 # This class restores the results of planning master problem
 class ResultPlanning(object):
-    def __init__(self,model,Para,x_line,x_sub,x_wind,x_solar):
+    def __init__(self,model,Para,x_line,x_sub,x_wind,x_solar,obj_con,obj_opr):
         self.x_line  = [int(x_line [i].x) for i in range(Para.N_line )]
         self.x_sub   = [int(x_sub  [i].x) for i in range(Para.N_sub  )]
         self.x_wind  = [int(x_wind [i].x) for i in range(Para.N_wind )]
         self.x_solar = [int(x_solar[i].x) for i in range(Para.N_solar)]
+        self.obj_con = obj_con.getValue()
+        self.obj_opr = obj_opr.x
+        self.obj = (model.getObjective()).getValue()  # objective
 
 
 # This class restores the results of reconfiguration sub-problem
@@ -263,7 +266,7 @@ def Depreciation(Life,Rate):
 # This function creates the upper-level planning problem (MILP), The Logic-based
 # Benders cut is added iteratively
 #
-def Planning(Para,Info):
+def Planning(Para,Info,Logic,n_iter):
     #
     # minimize
     #       Investment costs of line, substation, wind farm and PV station
@@ -279,21 +282,24 @@ def Planning(Para,Info):
     x_sub   = model.addVars(Para.N_sub,   vtype = GRB.BINARY)  # Substation
     x_wind  = model.addVars(Para.N_wind,  vtype = GRB.BINARY)  # Wind farm
     x_solar = model.addVars(Para.N_solar, vtype = GRB.BINARY)  # PV station
+    model.update()
+    vars = model.getVars()
     # Create fictitious variables
     f_line  = model.addVars(Para.N_line,  lb = -GRB.INFINITY)  # line flow
     f_load  = model.addVars(Para.N_bus,   lb = -GRB.INFINITY)  # load demand
     f_sub   = model.addVars(Para.N_sub,   lb = -GRB.INFINITY)  # power input
+    # Create operation cost variables
+    obj_opr = model.addVar()
 
     # Set objective
-    obj = LinExpr()
+    obj_con = LinExpr()
     Rec_rate = 0  # Reconvery rate in 5 years
     for y in range(Para.N_year_of_stage):
         Rec_rate = Rec_rate + (1 + Para.Int_rate) ** (-(y + 1))
-    obj = obj + quicksum(Rec_rate * x_line [n] * Para.Line [n][8] * Para.Dep_line  for n in range(Para.N_line ))
-    obj = obj + quicksum(Rec_rate * x_sub  [n] * Para.Sub  [n][4] * Para.Dep_sub   for n in range(Para.N_sub  ))
-    obj = obj + quicksum(Rec_rate * x_wind [n] * Para.Wind [n][3] * Para.Dep_wind  for n in range(Para.N_wind ))
-    obj = obj + quicksum(Rec_rate * x_solar[n] * Para.Solar[n][3] * Para.Dep_solar for n in range(Para.N_solar))
-    model.setObjective(obj, GRB.MINIMIZE)
+    obj_con = obj_con + quicksum(Rec_rate * x_line [n] * Para.Line [n][8] * Para.Dep_line  for n in range(Para.N_line ))
+    obj_con = obj_con + quicksum(Rec_rate * x_sub  [n] * Para.Sub  [n][4] * Para.Dep_sub   for n in range(Para.N_sub  ))
+    obj_con = obj_con + quicksum(Rec_rate * x_wind [n] * Para.Wind [n][3] * Para.Dep_wind  for n in range(Para.N_wind ))
+    obj_con = obj_con + quicksum(Rec_rate * x_solar[n] * Para.Solar[n][3] * Para.Dep_solar for n in range(Para.N_solar))
 
     # Constraint 1 (substation)
     for n in range(Para.N_sub_new):
@@ -334,10 +340,48 @@ def Planning(Para,Info):
         else:
             model.addConstr(expr + f_load[n] == f_sub[int(Info.Sub[n][0])])
     
-    # Optimize
+    # Logic-based Benders cut
+    if n_iter == 0:
+        model.addConstr(obj_opr == 0)
+    else:
+        for i in range(n_iter):
+            c    = Logic[i].c
+            d    = Logic[i].d
+            A    = Logic[i].A
+            B    = Logic[i].B
+            a    = Logic[i].a
+            dual = Logic[i].d_var  # dual variables
+            flag = Logic[i].d_flg  # status flag
+            beta = Logic[i].d_fit  # objective at leaf node
+            j0   = Logic[i].d_j0   # set of all j where branching has set xj to 0
+            j1   = Logic[i].d_j1   # set of all j where branching has set xj to 1
+            # Inequality initialization
+            n_logic = np.size(flag,0)  # number of new-added logic variables
+            logic_var = model.addVars(n_logic, vtype = GRB.BINARY)  # logic variable
+            logic_and = model.addVar(vtype = GRB.BINARY) # logic AND variable
+            # Formulate Inequality
+            for k in range(n_logic):
+                if flag[k] == 1: # optimality inequality
+                    expr = OptimalityInequality(c,d,A,B,a,dual[k],beta[k],j0[k],j1[k],vars)
+                    model.addConstr((logic_var[k] == 1) >> (expr <= 0.001))
+                    model.addConstr((logic_var[k] == 0) >> (expr >= 0.001))
+            # Add Benders cut
+            model.addConstr(logic_and == and_(logic_var)) # logic and
+            sum_cj = 0 # sum of cj
+            '''
+            for k in range(len(c)):
+                if c[k] > 0:
+                    sum_cj = sum_cj + 0
+                else:
+                    sum_cj = sum_cj + c[k]
+            '''
+            model.addConstr(obj_opr >= sum_cj + (Logic[i].obj - sum_cj) * logic_and)
+    
+    # Optimize    
+    model.setObjective(obj_con + obj_opr, GRB.MINIMIZE)
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultPlanning(model,Para,x_line,x_sub,x_wind,x_solar)
+        result = ResultPlanning(model,Para,x_line,x_sub,x_wind,x_solar,obj_con,obj_opr)
     return result
 
 
@@ -764,7 +808,38 @@ def Linprog(c,d,A,rhs,lb,ub):
         ub = np.append(ub, np.ones(n_eye) * float("inf"))
         [lp_var,lp_obj,_,lp_dul] = Linprog(c,d,A,rhs,lb,ub)
         lp_flg = -1
+    # List to array
+    lp_var = np.array(lp_var)
+    lp_obj = np.array(lp_obj)
+    lp_flg = np.array(lp_flg)
+    lp_dul = np.array(lp_dul)
     return [lp_var,lp_obj,lp_flg,lp_dul]
+
+
+# This function form the optimality inequality for logic Benders cut
+#
+def OptimalityInequality(c,d,A,B,a,dual,beta,j0,j1,vars):
+    # The following formulation is based on expression (35) in the paper
+    temp_uB = dual.dot(B) # u*B
+    temp_ua = dual.dot(a) # u*a
+    temp_bt = beta # beta
+    temp_sum_0 = 0 # initialize the first sum term
+    temp_sum_1 = 0 # initialize the second sum term
+    for i in range(len(vars)):
+        if i in j1: # if i belongs to J1
+            temp_sum_0 = temp_sum_0 + dual.dot(A[:,i]) - c[i]
+        if (i not in j0) and (i not in j1): # if i doesn't belong to J0 and J1
+            if dual.dot(A[:,i]) - c[i] >= 0:
+                temp_sum_1 = temp_sum_1 + dual.dot(A[:,i]) - c[i]
+            else:
+                temp_sum_1 = temp_sum_1 + 0
+    # Formulate expression
+    expr = LinExpr()
+    for i in range(len(vars)):
+        expr = expr + temp_uB[i] * vars[i]
+    expr = expr - temp_ua + temp_bt + temp_sum_0 + temp_sum_1 - d
+    # Return
+    return expr
 
 
 # This function plots the planning solution in all stages
@@ -826,16 +901,24 @@ if __name__ == "__main__":
     [Para,Info] = ReadData(filename)
     
     # Logic-based Benders decomposition
-    
-    Result_Planning = Planning(Para,Info)
-
-    # PlotPlanning(Para,Result_Planning.x_line)
-    LogicInfo = []
-    for s in range(Para.N_scenario):
-        Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
-        Result_RLP = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s)
-        LogicInfo.append(Result_RLP)
-    # PlotReconfiguration(Para,Result_Reconfig.y_line)
+    n_iter = 0  # index of iteration
+    Logic = []  # pool of logicbenders information
+    lower_bound = []  # 
+    upper_bound = []  #
+    while True:
+        Result_Planning = Planning(Para,Info,Logic,n_iter)
+        for s in range(Para.N_scenario):
+            Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
+            Result_RLP = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s)
+            Logic.append(Result_RLP)
+        lower_bound.append(Result_Planning.obj)
+        upper_bound.append(Result_Planning.obj_con + Result_Reconfig.obj)
+        gap = (upper_bound[n_iter]-lower_bound[n_iter])/upper_bound[n_iter]
+        if gap <= 1e-5 or n_iter > 15:
+            break
+        else:
+            n_iter = n_iter + 1
+        # PlotReconfiguration(Para,Result_Planning.x_line)
     
     time_end=time.time()
     print('totally cost',time_end-time_start)
