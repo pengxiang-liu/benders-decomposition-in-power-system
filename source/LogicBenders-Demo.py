@@ -591,7 +591,7 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
     d = Result_Reconfig.obj - np.inner(c,np.array(Result_Reconfig.y_star))
     # Formulate constraint matrics
     A = np.eye(N_y_var)  # reconfiguration
-    A = A[0:N_cons[0],:]
+    A = -A[0:N_cons[0],:]  # transform a <= b to -a >= -b
     for n in range(Para.N_bus):  # radial topology
         A_temp = np.zeros(N_y_var)
         line_head = Info.Line_head[n]
@@ -610,7 +610,8 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
         A = np.append(A, [ A_temp], axis = 0)  #  expr >=  0
         A = np.append(A, [-A_temp], axis = 0)  # -expr >= -0
     # Right-hand side value
-    rhs = np.array(Result_Reconfig.rhs[0:N_cons[0]])  # value
+    rhs = np.array(Result_Reconfig.rhs[0:N_cons[0]]) 
+    rhs = (-1) * rhs  # negate
     for n in range(N_cons[0],N_cons[1]):
         rhs = np.append(rhs,  Result_Reconfig.rhs[n])
         rhs = np.append(rhs, -Result_Reconfig.rhs[n])
@@ -737,7 +738,7 @@ def Linprog(c,d,A,rhs,lb,ub):
     model.setObjective(obj, GRB.MINIMIZE)
     # Add constraints
     for i in range(np.size(A,0)):
-        model.addConstr(quicksum(A[i][j] * x[j] for j in range(n_var)) >= rhs[i])
+        model.addConstr(quicksum(A[i,j] * x[j] for j in range(n_var)) >= rhs[i])
     for i in range(n_var):
         model.addConstr(x[i] >= lb[i])
         model.addConstr(x[i] <= ub[i])
