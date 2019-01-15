@@ -169,21 +169,16 @@ class ResultReconfig(object):
 
 # This class restores the results of reconfiguration sub-problem
 class ResultReconfigDual(object):
-    def __init__(self,model,Para,N_cons,result):
-        # Model result
-        self.y_line  = result.y_line
-        self.y_sub   = result.y_sub
-        self.y_wind  = result.y_wind
-        self.y_solar = result.y_solar
-        self.y_pos   = result.y_pos
-        self.y_neg   = result.y_neg
-        self.obj = (model.getObjective()).getValue()
-        # Dual information for logic-Benders
+    def __init__(self,model,Para,N_con,y_vars,obj):
+        # Reconfiguration solution
+        self.y_vars = [y_vars[i].x for i in range(len(y_vars))]
+        self.obj    = obj.getValue()
+        self.N_con  = N_con
+        # Dual information for reconfiguration variables
         constr = model.getConstrs()
-        self.N_cons = N_cons
-        self.rhs    = [constr[i].rhs for i in range(N_cons[-1])]
-        self.y_star = [constr[i].rhs for i in range(N_cons[-2],N_cons[-1])]
-        self.y_dual = [constr[i].pi  for i in range(N_cons[-2],N_cons[-1])]
+        dual_line = np.zeros(Para.N_line)
+        for n in range(Para.N_line):
+            dual_line[n] = dual_line[n] + 0
 
 
 # This class restores the results of reconfiguration sub-problem
@@ -263,6 +258,32 @@ def Depreciation(Life,Rate):
     return Rate*((1+Rate)**Life)/((1+Rate)**Life-1)
 
 
+# This function form the optimality inequality for logic Benders cut
+#
+def OptimalityInequality(c,d,A,B,a,dual,beta,j0,j1,var):
+    # The following formulation is based on expression (35) in the paper
+    temp_uB = dual.dot(B) # u*B
+    temp_ua = dual.dot(a) # u*a
+    temp_bt = beta # beta
+    temp_sum_0 = 0 # initialize the first sum term
+    temp_sum_1 = 0 # initialize the second sum term
+    for i in range(len(var)):
+        if i in j1: # if i belongs to J1
+            temp_sum_0 = temp_sum_0 + dual.dot(A[:,i]) - c[i]
+        if (i not in j0) and (i not in j1): # if i doesn't belong to J0 and J1
+            if dual.dot(A[:,i]) - c[i] >= 0:
+                temp_sum_1 = temp_sum_1 + dual.dot(A[:,i]) - c[i]
+            else:
+                temp_sum_1 = temp_sum_1 + 0
+    # Formulate expression
+    expr = LinExpr()
+    for i in range(len(var)):
+        expr = expr + temp_uB[i] * var[i]
+    expr = expr - temp_ua + temp_bt + temp_sum_0 + temp_sum_1 - d
+    # Return
+    return expr
+
+
 # This function creates the upper-level planning problem (MILP), The Logic-based
 # Benders cut is added iteratively
 #
@@ -283,7 +304,7 @@ def Planning(Para,Info,Logic,n_iter):
     x_wind  = model.addVars(Para.N_wind,  vtype = GRB.BINARY)  # Wind farm
     x_solar = model.addVars(Para.N_solar, vtype = GRB.BINARY)  # PV station
     model.update()
-    vars = model.getVars()
+    var = model.getVars()
     # Create fictitious variables
     f_line  = model.addVars(Para.N_line,  lb = -GRB.INFINITY)  # line flow
     f_load  = model.addVars(Para.N_bus,   lb = -GRB.INFINITY)  # load demand
@@ -362,7 +383,7 @@ def Planning(Para,Info,Logic,n_iter):
             # Formulate Inequality
             for k in range(n_logic):
                 if flag[k] == 1: # optimality inequality
-                    expr = OptimalityInequality(c,d,A,B,a,dual[k],beta[k],j0[k],j1[k],vars)
+                    expr = OptimalityInequality(c,d,A,B,a,dual[k],beta[k],j0[k],j1[k],var)
                     model.addConstr((logic_var[k] == 1) >> (expr <= 0.001))
                     model.addConstr((logic_var[k] == 0) >> (expr >= 0.001))
             # Add Benders cut
@@ -418,6 +439,7 @@ def Reconfig(Para,Info,Result_Planning,s):
     y_solar = model.addVars(Para.N_solar,vtype = GRB.BINARY)  # PV station
     y_pos   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # positive line flow
     y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
+    y_vars  = model.getVars()  # get reconfiguration variables
     # Create power flow variables
     N_V_bus   = 0  # Square of bus voltage
     N_P_line  = N_V_bus   + Para.N_bus    # Active power flow of line
@@ -443,8 +465,8 @@ def Reconfig(Para,Info,Result_Planning,s):
     obj = obj * Para.N_day_season * Para.N_hour
     model.setObjective(obj, GRB.MINIMIZE)
 
-    N_cons = []  # indexing constraints
-    # Constraint 1 (Reconfiguration)
+    N_con = []  # indexing constraints
+    # 0.Reconfiguration
     for n in range(Para.N_line):
         if n < Para.N_line_ext:
             model.addConstr(y_line[n] <= 1)
@@ -460,9 +482,9 @@ def Reconfig(Para,Info,Result_Planning,s):
     for n in range(Para.N_wind):
         model.addConstr(y_solar[n] <= Result_Planning.x_solar[n])
     model.update()
-    N_cons.append(model.getAttr(GRB.Attr.NumConstrs))
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 0
 
-    # Constraint 2 (Radial topology)
+    # 1.Radial topology
     for n in range(Para.N_bus):
         line_head = Info.Line_head[n]
         line_tail = Info.Line_tail[n]
@@ -471,12 +493,12 @@ def Reconfig(Para,Info,Result_Planning,s):
             model.addConstr(expr == 1)
         else:  # none load bus
             model.addConstr(expr == 0)
-    model.addConstrs(y_pos[n] + y_neg[n] - y_line[n] == 0 for n in range(Para.N_line))
+    for n in range(Para.N_line):
+        model.addConstr(y_pos[n] + y_neg[n] - y_line[n] == 0)
     model.update()
-    N_cons.append(model.getAttr(GRB.Attr.NumConstrs))
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 1
 
-    # Constraint 2 (optimal power flow)
-    # 1.Active power balance equation
+    # 2.Active power balance equation
     for n in range(Para.N_bus):
         line_head = Info.Line_head[n]
         line_tail = Info.Line_tail[n]
@@ -491,7 +513,10 @@ def Reconfig(Para,Info,Result_Planning,s):
         if  Info.Solar[n] != []:
             expr = expr + Var[N_S_solar + Info.Solar[n][0]] * Para.Solar_angle
         model.addConstr(expr == tp_load[n] * Para.Load_angle)
-    # 2.Reactive power balance equation
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 2
+
+    # 3.Reactive power balance equation
     for n in range(Para.N_bus):
         line_head = Info.Line_head[n]
         line_tail = Info.Line_tail[n]
@@ -506,7 +531,10 @@ def Reconfig(Para,Info,Result_Planning,s):
         if  Info.Solar[n] != []:
             expr = expr + Var[N_S_solar + Info.Solar[n][0]] * math.sqrt(1 - Para.Solar_angle ** 2)
         model.addConstr(expr == tp_load[n] * math.sqrt(1 - Para.Load_angle ** 2))
-    # 3.Voltage balance on line
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 3
+
+    # 4.Voltage balance on line
     for n in range(Para.N_line):
         bus_head = Para.Line[n,1]
         bus_tail = Para.Line[n,2]
@@ -516,14 +544,24 @@ def Reconfig(Para,Info,Result_Planning,s):
         expr = expr - Var[N_Q_line + n] * 2 * Para.Line_X[n]
         model.addConstr(expr >= -Para.Big_M * (1 - y_line[n]))
         model.addConstr(expr <=  Para.Big_M * (1 - y_line[n]))
-    # 4.Renewables
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 4
+
+    # 5.Renewables(wind farm)
     for n in range(Para.N_wind):
         expr = Var[N_S_wind  + n] + Var[N_C_wind  + n]
         model.addConstr(expr == y_wind [n] * tp_wind [n])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 5
+
+    # 6.Renewables(solar station)
     for n in range(Para.N_solar):
         expr = Var[N_S_solar + n] + Var[N_C_solar + n]
         model.addConstr(expr == y_solar[n] * tp_solar[n])
-    # 5.Linearization of quadratic terms
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 6
+
+    # 7.Linearization of quadratic terms
     for n in range(Para.N_line):
         expr = Var[N_P_line + n] + Var[N_Q_line + n]
         model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
@@ -531,6 +569,10 @@ def Reconfig(Para,Info,Result_Planning,s):
         expr = Var[N_P_line + n] - Var[N_Q_line + n]
         model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
         model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 7
+
+    # 8.Linearization of quadratic terms
     for n in range(Para.N_sub):
         expr = Var[N_P_sub + n] + Var[N_Q_sub + n]
         model.addConstr(expr >= -math.sqrt(2) * y_sub[n] * Cap_sub[n])
@@ -539,30 +581,30 @@ def Reconfig(Para,Info,Result_Planning,s):
         model.addConstr(expr >= -math.sqrt(2) * y_sub[n] * Cap_sub[n])
         model.addConstr(expr <=  math.sqrt(2) * y_sub[n] * Cap_sub[n])
     model.update()
-    N_cons.append(model.getAttr(GRB.Attr.NumConstrs))
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 8
 
-    # Constraint 3 (bounds of variables)
-    # 1.Voltage
+    # 9.bounds of variables
+    # 1) Voltage
     for n in range(Para.N_bus):
         model.addConstr(Var[N_V_bus + n] >= Para.Voltage_low ** 2)
         model.addConstr(Var[N_V_bus + n] <= Para.Voltage_upp ** 2)
-    # 2.Power flow
+    # 2) Power flow
     for n in range(Para.N_line):
         model.addConstr(Var[N_P_line + n] >= -y_line[n] * Cap_line[n])
         model.addConstr(Var[N_P_line + n] <=  y_line[n] * Cap_line[n])
         model.addConstr(Var[N_Q_line + n] >= -y_line[n] * Cap_line[n])
         model.addConstr(Var[N_Q_line + n] <=  y_line[n] * Cap_line[n])
-    # 3.Substation
+    # 3) Substation
     for n in range(Para.N_sub):
         model.addConstr(Var[N_P_sub + n] >= 0)
         model.addConstr(Var[N_P_sub + n] <= y_sub[n] * Cap_sub[n])
         model.addConstr(Var[N_Q_sub + n] >= 0)
         model.addConstr(Var[N_Q_sub + n] <= y_sub[n] * Cap_sub[n])
-    # 4.Load shedding
+    # 4) Load shedding
     for n in range(Para.N_bus):
         model.addConstr(Var[N_C_load + n] >= 0)
         model.addConstr(Var[N_C_load + n] <= tp_load[n])
-    # 5.Renewables
+    # 5) Renewables
     for n in range(Para.N_wind):
         model.addConstr(Var[N_S_wind + n] >= 0)
         model.addConstr(Var[N_S_wind + n] <= tp_wind[n])
@@ -574,7 +616,7 @@ def Reconfig(Para,Info,Result_Planning,s):
         model.addConstr(Var[N_C_solar + n] >= 0)
         model.addConstr(Var[N_C_solar + n] <= tp_solar[n])
     model.update()
-    N_cons.append(model.getAttr(GRB.Attr.NumConstrs))
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 9
 
     # Optimize
     model.optimize()
@@ -587,14 +629,14 @@ def Reconfig(Para,Info,Result_Planning,s):
         model.addConstrs(y_solar[n] == result.y_solar[n] for n in range(Para.N_solar))
         model.addConstrs(y_pos  [n] == result.y_pos  [n] for n in range(Para.N_line ))
         model.addConstrs(y_neg  [n] == result.y_neg  [n] for n in range(Para.N_line ))
-        model.update()  # update all changes
-        N_cons.append(model.getAttr(GRB.Attr.NumConstrs))
+        model.update()
+        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 10
         # Relax
         model = model.relax()  # relax binary variables to continuous variables
         model.optimize()
         if model.status == GRB.Status.OPTIMAL:
-            result_dual = ResultReconfigDual(model,Para,N_cons,result)
-    return result_dual
+            result_dual = ResultReconfigDual(model,Para,N_con,y_vars,obj)
+    return result,result_dual
 
 
 # This function creates a relaxed reconfiguration 0-1 problem with pure binary variables.
@@ -628,14 +670,14 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
     N_y_neg   = N_y_pos   + Para.N_line
     N_y_var   = N_y_neg   + Para.N_line
     # Passing parameters
-    N_cons = Result_Reconfig.N_cons
+    N_con = Result_Reconfig.N_con
 
     # Formulate objective matrics
     c = np.array(Result_Reconfig.y_dual)
     d = Result_Reconfig.obj - np.inner(c,np.array(Result_Reconfig.y_star))
     # Formulate constraint matrics
     A = np.eye(N_y_var)  # reconfiguration
-    A = -A[0:N_cons[0],:]  # transform a <= b to -a >= -b
+    A = -A[0:N_con[0],:]  # transform a <= b to -a >= -b
     for n in range(Para.N_bus):  # radial topology
         A_temp = np.zeros(N_y_var)
         line_head = Info.Line_head[n]
@@ -654,14 +696,14 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
         A = np.append(A, [ A_temp], axis = 0)  #  expr >=  0
         A = np.append(A, [-A_temp], axis = 0)  # -expr >= -0
     # Right-hand side value
-    rhs = np.array(Result_Reconfig.rhs[0:N_cons[0]]) 
+    rhs = np.array(Result_Reconfig.rhs[0:N_con[0]]) 
     rhs = (-1) * rhs  # negate
-    for n in range(N_cons[0],N_cons[1]):
+    for n in range(N_con[0],N_con[1]):
         rhs = np.append(rhs,  Result_Reconfig.rhs[n])
         rhs = np.append(rhs, -Result_Reconfig.rhs[n])
     # Right-hand side constant a
-    a = np.zeros(N_cons[0])  # constant
-    for n in range(N_cons[0],N_cons[1]):
+    a = np.zeros(N_con[0])  # constant
+    for n in range(N_con[0],N_con[1]):
         a = np.append(a,  Result_Reconfig.rhs[n])
         a = np.append(a, -Result_Reconfig.rhs[n])
     for n in range(Para.N_line_ext):
@@ -670,7 +712,7 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s):
         a[N_x_sub  + n] = -1
     # Right-hand side coeficient matrix B
     B = np.eye(N_x_var)
-    for n in range(N_cons[0],N_cons[1]):
+    for n in range(N_con[0],N_con[1]):
         B = np.append(B, [np.zeros(N_x_var)], axis = 0)
         B = np.append(B, [np.zeros(N_x_var)], axis = 0)
     for n in range(Para.N_line_ext):
@@ -814,32 +856,6 @@ def Linprog(c,d,A,rhs,lb,ub):
     lp_flg = np.array(lp_flg)
     lp_dul = np.array(lp_dul)
     return [lp_var,lp_obj,lp_flg,lp_dul]
-
-
-# This function form the optimality inequality for logic Benders cut
-#
-def OptimalityInequality(c,d,A,B,a,dual,beta,j0,j1,vars):
-    # The following formulation is based on expression (35) in the paper
-    temp_uB = dual.dot(B) # u*B
-    temp_ua = dual.dot(a) # u*a
-    temp_bt = beta # beta
-    temp_sum_0 = 0 # initialize the first sum term
-    temp_sum_1 = 0 # initialize the second sum term
-    for i in range(len(vars)):
-        if i in j1: # if i belongs to J1
-            temp_sum_0 = temp_sum_0 + dual.dot(A[:,i]) - c[i]
-        if (i not in j0) and (i not in j1): # if i doesn't belong to J0 and J1
-            if dual.dot(A[:,i]) - c[i] >= 0:
-                temp_sum_1 = temp_sum_1 + dual.dot(A[:,i]) - c[i]
-            else:
-                temp_sum_1 = temp_sum_1 + 0
-    # Formulate expression
-    expr = LinExpr()
-    for i in range(len(vars)):
-        expr = expr + temp_uB[i] * vars[i]
-    expr = expr - temp_ua + temp_bt + temp_sum_0 + temp_sum_1 - d
-    # Return
-    return expr
 
 
 # This function plots the planning solution in all stages
