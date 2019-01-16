@@ -34,8 +34,8 @@ class Parameter(object):
         self.N_year_of_stage = 15
         self.N_day = 1  # number of typical day
         self.N_day_season = 365  # number of days in each season
-        self.N_scenario = 1  # number of reconfiguration in a day
-        self.N_hour = int(24/self.N_scenario)  # number of hour in a scenario
+        self.N_scenario = 2  # number of reconfiguration in a day
+        self.N_hour = int(round(24/self.N_scenario))  # number of hour in a scenario
         self.Int_rate = 0.05  # interest rate
         self.Big_M = 245  # Big M
         self.Voltage = 35
@@ -112,34 +112,34 @@ class BusInfo(object):
         for i in range(Para.N_line):
             head = Para.Line[i][1]
             tail = Para.Line[i][2]
-            Line_head[int(head)].append(i)  # set of lines whose head-end is bus i
-            Line_tail[int(tail)].append(i)  # set of lines whose tail-end is bus i
+            Line_head[int(round(head))].append(i)  # set of lines whose head-end is bus i
+            Line_tail[int(round(tail))].append(i)  # set of lines whose tail-end is bus i
         self.Line_head = Line_head
         self.Line_tail = Line_tail
         # Substation
         Sub = [[] for i in range(Para.N_bus)]
         for i in range(Para.N_sub):
-            Sub[int(Para.Sub[i][1])].append(i)  # substation number of bus i
+            Sub[int(round(Para.Sub[i][1]))].append(i)  # substation number of bus i
         self.Sub = Sub
         # Wind
         Wind = [[] for i in range(Para.N_bus)]
         for i in range(Para.N_wind):
-            Wind[int(Para.Wind[i][1])].append(i)  # wind farm number of bus i
+            Wind[int(round(Para.Wind[i][1]))].append(i)  # wind farm number of bus i
         self.Wind = Wind
         # Solar
         Solar = [[] for i in range(Para.N_bus)]
         for i in range(Para.N_solar):
-            Solar[int(Para.Solar[i][1])].append(i)  # PV station number of bus i
+            Solar[int(round(Para.Solar[i][1]))].append(i)  # PV station number of bus i
         self.Solar = Solar
 
 
 # This class restores the results of planning master problem
 class ResultPlanning(object):
     def __init__(self,model,Para,x_line,x_sub,x_wind,x_solar,obj_con,obj_opr):
-        self.x_line  = [round(x_line [i].x) for i in range(Para.N_line )]
-        self.x_sub   = [round(x_sub  [i].x) for i in range(Para.N_sub  )]
-        self.x_wind  = [round(x_wind [i].x) for i in range(Para.N_wind )]
-        self.x_solar = [round(x_solar[i].x) for i in range(Para.N_solar)]
+        self.x_line  = [int(round(x_line [i].x)) for i in range(Para.N_line )]
+        self.x_sub   = [int(round(x_sub  [i].x)) for i in range(Para.N_sub  )]
+        self.x_wind  = [int(round(x_wind [i].x)) for i in range(Para.N_wind )]
+        self.x_solar = [int(round(x_solar[i].x)) for i in range(Para.N_solar)]
         self.obj_con = obj_con.getValue()
         self.obj_opr = obj_opr.x
         self.obj = (model.getObjective()).getValue()  # objective
@@ -149,12 +149,12 @@ class ResultPlanning(object):
 class ResultReconfig(object):
     def __init__(self,model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var,obj):
         # Reconfiguration variable
-        self.y_line  = [round(y_line [i].x) for i in range(Para.N_line )]
-        self.y_sub   = [round(y_sub  [i].x) for i in range(Para.N_sub  )]
-        self.y_wind  = [round(y_wind [i].x) for i in range(Para.N_wind )]
-        self.y_solar = [round(y_solar[i].x) for i in range(Para.N_solar)]
-        self.y_pos   = [round(y_pos  [i].x) for i in range(Para.N_line )]
-        self.y_neg   = [round(y_neg  [i].x) for i in range(Para.N_line )]
+        self.y_line  = [int(round(y_line [i].x)) for i in range(Para.N_line )]
+        self.y_sub   = [int(round(y_sub  [i].x)) for i in range(Para.N_sub  )]
+        self.y_wind  = [int(round(y_wind [i].x)) for i in range(Para.N_wind )]
+        self.y_solar = [int(round(y_solar[i].x)) for i in range(Para.N_solar)]
+        self.y_pos   = [int(round(y_pos  [i].x)) for i in range(Para.N_line )]
+        self.y_neg   = [int(round(y_neg  [i].x)) for i in range(Para.N_line )]
         # Power flow variable
         self.V_bus   = [Var[N_V_bus   + i].x for i in range(Para.N_bus  )]
         self.P_line  = [Var[N_P_line  + i].x for i in range(Para.N_line )]
@@ -325,8 +325,8 @@ def Planning(Para,Info,Logic,n_iter):
 
     # Constraint 1 (substation)
     for n in range(Para.N_sub_new):
-        line_head = Info.Line_head[int(Para.Sub_new[n][1])]
-        line_tail = Info.Line_tail[int(Para.Sub_new[n][1])]
+        line_head = Info.Line_head[int(round(Para.Sub_new[n][1]))]
+        line_tail = Info.Line_tail[int(round(Para.Sub_new[n][1]))]
         model.addConstrs(x_line[i] <= x_sub[Para.N_sub_ext + n] for i in line_head)
         model.addConstrs(x_line[i] <= x_sub[Para.N_sub_ext + n] for i in line_tail)
     # Constraint 2 (load bus)
@@ -360,7 +360,7 @@ def Planning(Para,Info,Logic,n_iter):
         if Info.Sub[n] == []:
             model.addConstr(expr + f_load[n] == 0)
         else:
-            model.addConstr(expr + f_load[n] == f_sub[int(Info.Sub[n][0])])
+            model.addConstr(expr + f_load[n] == f_sub[int(round(Info.Sub[n][0]))])
     
     # Logic-based Benders cut
     if n_iter == 0:
@@ -787,7 +787,7 @@ def BranchBound(c,d,A,rhs,lb,ub,br = 0):
                 flg_out = 1
             else:  # real solution
                 leaf = np.where(lp_gap > 0)  # index of leaf node for branching
-                pick = int(leaf[0][0])  # pick up the first index
+                pick = int(round(leaf[0][0]))  # pick up the first index
                 lb_temp = lb  # temporary lower bound
                 ub_temp = ub  # temporary upper bound
                 # The upper branch calculation
@@ -875,10 +875,10 @@ def PlotPlanning(Para,x_line):
         else:
             plt.plot(x[n],y[n],'rs')
     for n in range(Para.N_line):  # Lines
-        x1 = x[int(Para.Line[n,1])]
-        y1 = y[int(Para.Line[n,1])]
-        x2 = x[int(Para.Line[n,2])]
-        y2 = y[int(Para.Line[n,2])]
+        x1 = x[int(round(Para.Line[n,1]))]
+        y1 = y[int(round(Para.Line[n,1]))]
+        x2 = x[int(round(Para.Line[n,2]))]
+        y2 = y[int(round(Para.Line[n,2]))]
         if x_line[n] == 1 or n < Para.N_line_ext:
             plt.plot([x1,x2],[y1,y2],'r-')
         else:
@@ -900,10 +900,10 @@ def PlotReconfiguration(Para,y_line):
         else:
             plt.plot(x[n],y[n],'rs')
     for n in range(Para.N_line):  # Lines
-        x1 = x[int(Para.Line[n,1])]
-        y1 = y[int(Para.Line[n,1])]
-        x2 = x[int(Para.Line[n,2])]
-        y2 = y[int(Para.Line[n,2])]
+        x1 = x[int(round(Para.Line[n,1]))]
+        y1 = y[int(round(Para.Line[n,1]))]
+        x2 = x[int(round(Para.Line[n,2]))]
+        y2 = y[int(round(Para.Line[n,2]))]
         if y_line[n] == 1:
             plt.plot([x1,x2],[y1,y2],'r-')
         else:
