@@ -360,8 +360,19 @@ def Planning(Para,Info,Logic,n_iter):
         if Info.Sub[n] == []:
             model.addConstr(expr + f_load[n] == 0)
         else:
-            model.addConstr(expr + f_load[n] == f_sub[int(round(Info.Sub[n][0]))])
-    
+            model.addConstr(expr + f_load[n] == f_sub[int(round(Info.Sub[n][0]))])   
+    # Constraint 5 (capacity)
+    for s in range(Para.N_scenario):
+        tp_load  = Para.Load * Para.Typical_load[s]  # load
+        tp_wind  = Para.Wind [:,2] * Para.Typical_wind [s]  # wind
+        tp_solar = Para.Solar[:,2] * Para.Typical_solar[s]  # solar
+        expr = LinExpr()
+        expr = expr + sum(Para.Sub_S_ext)
+        expr = expr + quicksum(x_sub[n] * Para.Sub_S_new[n] for n in range(Para.N_sub))
+        expr = expr + quicksum(x_wind [n] * tp_wind [n] for n in range(Para.N_wind ))
+        expr = expr + quicksum(x_solar[n] * tp_solar[n] for n in range(Para.N_solar))
+        model.addConstr(expr >= sum(tp_load))
+
     # Logic-based Benders cut
     if n_iter == 0:
         model.addConstr(obj_opr == 0)
@@ -430,8 +441,10 @@ def Reconfig(Para,Info,Result_Planning,s):
     tp_wind  = Para.Wind [:,2] * Para.Typical_wind [s]  # wind
     tp_solar = Para.Solar[:,2] * Para.Typical_solar[s]  # solar
     # Capacity data
-    Cap_line = [Para.Line_S_ext[n] + Para.Line_S_new[n] for n in range(Para.N_line)]
-    Cap_sub  = [Para.Sub_S_ext [n] + Para.Sub_S_new [n] for n in range(Para.N_sub )]
+    Cap_line = [Para.Line_S_ext[n] + Result_Planning.x_line[n] * Para.Line_S_new[n] for n in range(Para.N_line)]
+    Cap_sub  = [Para.Sub_S_ext [n] + Result_Planning.x_sub [n] * Para.Sub_S_new [n] for n in range(Para.N_sub )]
+    Lim_line = [Para.Line_S_ext[n] + Para.Line_S_new[n] for n in range(Para.N_line)]
+    Lim_sub  = [Para.Sub_S_ext [n] + Para.Sub_S_new [n] for n in range(Para.N_sub )]
 
     # Create reconfiguration variables
     y_line  = model.addVars(Para.N_line, vtype = GRB.BINARY)  # line
@@ -564,11 +577,15 @@ def Reconfig(Para,Info,Result_Planning,s):
     # 7.Linearization of quadratic terms
     for n in range(Para.N_line):
         expr = Var[N_P_line + n] + Var[N_Q_line + n]
-        model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
-        model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
+        model.addConstr(expr >= -math.sqrt(2) * Cap_line[n])
+        model.addConstr(expr <=  math.sqrt(2) * Cap_line[n])
+        model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Lim_line[n])
+        model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Lim_line[n])
         expr = Var[N_P_line + n] - Var[N_Q_line + n]
-        model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
-        model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
+        model.addConstr(expr >= -math.sqrt(2) * Cap_line[n])
+        model.addConstr(expr <=  math.sqrt(2) * Cap_line[n])
+        model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Lim_line[n])
+        model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Lim_line[n])
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 7
 
@@ -576,10 +593,12 @@ def Reconfig(Para,Info,Result_Planning,s):
     for n in range(Para.N_sub):
         expr = Var[N_P_sub + n] + Var[N_Q_sub + n]
         model.addConstr(expr >= 0)
-        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
+        model.addConstr(expr <= math.sqrt(2) * Cap_sub[n])
+        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Lim_sub[n])
         expr = Var[N_P_sub + n] - Var[N_Q_sub + n]
         model.addConstr(expr >= 0)
-        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
+        model.addConstr(expr <= math.sqrt(2) * Cap_sub[n])
+        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Lim_sub[n])
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 8
 
@@ -590,16 +609,24 @@ def Reconfig(Para,Info,Result_Planning,s):
         model.addConstr(Var[N_V_bus + n] <= Para.Voltage_upp ** 2)
     # 2) Power flow
     for n in range(Para.N_line):
-        model.addConstr(Var[N_P_line + n] >= -y_line[n] * Cap_line[n])
-        model.addConstr(Var[N_P_line + n] <=  y_line[n] * Cap_line[n])
-        model.addConstr(Var[N_Q_line + n] >= -y_line[n] * Cap_line[n])
-        model.addConstr(Var[N_Q_line + n] <=  y_line[n] * Cap_line[n])
+        model.addConstr(Var[N_P_line + n] >= -Cap_line[n])
+        model.addConstr(Var[N_P_line + n] <=  Cap_line[n])
+        model.addConstr(Var[N_P_line + n] >= -y_line[n] * Lim_line[n])
+        model.addConstr(Var[N_P_line + n] <=  y_line[n] * Lim_line[n])
+    for n in range(Para.N_line):
+        model.addConstr(Var[N_Q_line + n] >= -Cap_line[n])
+        model.addConstr(Var[N_Q_line + n] <=  Cap_line[n])
+        model.addConstr(Var[N_Q_line + n] >= -y_line[n] * Lim_line[n])
+        model.addConstr(Var[N_Q_line + n] <=  y_line[n] * Lim_line[n])
     # 3) Substation
     for n in range(Para.N_sub):
         model.addConstr(Var[N_P_sub + n] >= 0)
-        model.addConstr(Var[N_P_sub + n] <= y_sub[n] * Cap_sub[n])
+        model.addConstr(Var[N_P_sub + n] <= Cap_sub[n])
+        model.addConstr(Var[N_P_sub + n] <= y_sub[n] * Lim_sub[n])
+    for n in range(Para.N_sub):
         model.addConstr(Var[N_Q_sub + n] >= 0)
-        model.addConstr(Var[N_Q_sub + n] <= y_sub[n] * Cap_sub[n])
+        model.addConstr(Var[N_Q_sub + n] <= Cap_sub[n])
+        model.addConstr(Var[N_Q_sub + n] <= y_sub[n] * Lim_sub[n])
     # 4) Load shedding
     for n in range(Para.N_bus):
         model.addConstr(Var[N_C_load + n] >= 0)
@@ -926,6 +953,8 @@ if __name__ == "__main__":
     upper_bound = []  #
     while True:
         Result_Planning = Planning(Para,Info,Logic,n_iter)
+        for n in range(Para.N_line):
+            Result_Planning.x_line[n] = 1
         for s in range(Para.N_scenario):
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_RLP = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,s)
