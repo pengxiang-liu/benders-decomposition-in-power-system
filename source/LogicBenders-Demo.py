@@ -146,7 +146,7 @@ class ResultPlanning(object):
 
 # This class restores the results of reconfiguration sub-problem
 class ResultReconfig(object):
-    def __init__(self,model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var):
+    def __init__(self,model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var,obj):
         # Reconfiguration variable
         self.y_line  = [int(y_line [i].x) for i in range(Para.N_line )]
         self.y_sub   = [int(y_sub  [i].x) for i in range(Para.N_sub  )]
@@ -165,20 +165,32 @@ class ResultReconfig(object):
         self.C_wind  = [Var[N_C_wind  + i].x for i in range(Para.N_wind )]
         self.S_solar = [Var[N_S_solar + i].x for i in range(Para.N_solar)]
         self.C_solar = [Var[N_C_solar + i].x for i in range(Para.N_solar)]
+        # Objective
+        self.obj    = obj.getValue()
 
 
 # This class restores the results of reconfiguration sub-problem
 class ResultReconfigDual(object):
-    def __init__(self,model,Para,N_con,y_vars,obj):
-        # Reconfiguration solution
-        self.y_vars = [y_vars[i].x for i in range(len(y_vars))]
-        self.obj    = obj.getValue()
-        self.N_con  = N_con
+    def __init__(self,model,Para,Cap_line,Cap_sub,N_con):
         # Dual information for reconfiguration variables
+        self.N_con  = N_con
         constr = model.getConstrs()
+        # Line
         dual_line = np.zeros(Para.N_line)
         for n in range(Para.N_line):
-            dual_line[n] = dual_line[n] + 0
+            '''
+            for i in range(2):
+                dual_line[n] = dual_line[n] + constr[N_con[3] + 2*n + i].pi * Para.Big_M
+            '''
+            for i in range(4):
+                dual_line[n] = dual_line[n] - constr[N_con[6] + 4*n + i].pi * math.sqrt(2) * Cap_line[n]
+                dual_line[n] = dual_line[n] - constr[N_con[8] + 2*N_P_line + 4*n + i].pi * Cap_line[n]
+            
+        # Substation
+        dual_sub = np.zeros(Para.N_sub)  # substations
+        for n in range(Para.N_sub):
+            for i in range(2):
+                pass
 
 
 # This class restores the results of reconfiguration sub-problem
@@ -429,8 +441,8 @@ def Reconfig(Para,Info,Result_Planning,s):
     tp_wind  = Para.Wind [:,2] * Para.Typical_wind [s]  # wind
     tp_solar = Para.Solar[:,2] * Para.Typical_solar[s]  # solar
     # Capacity data
-    Cap_line = [Para.Line_S_ext[n] + Result_Planning.x_line[n] * Para.Line_S_new[n] for n in range(Para.N_line)]
-    Cap_sub  = [Para.Sub_S_ext [n] + Result_Planning.x_sub [n] * Para.Sub_S_new [n] for n in range(Para.N_sub )]
+    Cap_line = [Para.Line_S_ext[n] + Para.Line_S_new[n] for n in range(Para.N_line)]
+    Cap_sub  = [Para.Sub_S_ext [n] + Para.Sub_S_new [n] for n in range(Para.N_sub )]
 
     # Create reconfiguration variables
     y_line  = model.addVars(Para.N_line, vtype = GRB.BINARY)  # line
@@ -439,7 +451,6 @@ def Reconfig(Para,Info,Result_Planning,s):
     y_solar = model.addVars(Para.N_solar,vtype = GRB.BINARY)  # PV station
     y_pos   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # positive line flow
     y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
-    y_vars  = model.getVars()  # get reconfiguration variables
     # Create power flow variables
     N_V_bus   = 0  # Square of bus voltage
     N_P_line  = N_V_bus   + Para.N_bus    # Active power flow of line
@@ -575,11 +586,11 @@ def Reconfig(Para,Info,Result_Planning,s):
     # 8.Linearization of quadratic terms
     for n in range(Para.N_sub):
         expr = Var[N_P_sub + n] + Var[N_Q_sub + n]
-        model.addConstr(expr >= -math.sqrt(2) * y_sub[n] * Cap_sub[n])
-        model.addConstr(expr <=  math.sqrt(2) * y_sub[n] * Cap_sub[n])
+        model.addConstr(expr >= 0)
+        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
         expr = Var[N_P_sub + n] - Var[N_Q_sub + n]
-        model.addConstr(expr >= -math.sqrt(2) * y_sub[n] * Cap_sub[n])
-        model.addConstr(expr <=  math.sqrt(2) * y_sub[n] * Cap_sub[n])
+        model.addConstr(expr >= 0)
+        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 8
 
@@ -621,7 +632,7 @@ def Reconfig(Para,Info,Result_Planning,s):
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultReconfig(model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var)
+        result = ResultReconfig(model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var,obj)
         # Fix binary reconfiguration variables
         model.addConstrs(y_line [n] == result.y_line [n] for n in range(Para.N_line ))
         model.addConstrs(y_sub  [n] == result.y_sub  [n] for n in range(Para.N_sub  ))
@@ -635,7 +646,7 @@ def Reconfig(Para,Info,Result_Planning,s):
         model = model.relax()  # relax binary variables to continuous variables
         model.optimize()
         if model.status == GRB.Status.OPTIMAL:
-            result_dual = ResultReconfigDual(model,Para,N_con,y_vars,obj)
+            result_dual = ResultReconfigDual(model,Para,Cap_line,Cap_sub,N_con)
     return result,result_dual
 
 
