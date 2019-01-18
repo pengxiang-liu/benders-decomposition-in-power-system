@@ -1104,13 +1104,16 @@ if __name__ == "__main__":
             Result_RLP = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
             Logic.append(Result_RLP)
         lower_bound.append(Result_Planning.obj)
-        upper_bound.append(Result_Planning.obj_con + Result_Reconfig.obj)
+        upper_bound.append(Result_Planning.obj_con + Logic[-1].obj + Logic[-2].obj)
         gap = (upper_bound[n_iter]-lower_bound[n_iter])/upper_bound[n_iter]
         if gap <= 1e-5 or n_iter > 100:
             break
         else:
             n_iter = n_iter + 1
     PlotPlanning(Para,Result_Planning.x_line)
+    plt.plot(lower_bound)
+    plt.plot(upper_bound)
+    plt.show()
     
     time_end=time.time()
     print('totally cost',time_end-time_start)
