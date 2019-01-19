@@ -801,7 +801,7 @@ def ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s):
         # Modify the dual information
         for n in range(Para.N_line):
             if Result_Planning.x_line[n] == 1 and Result_Reconfig.y_line[n] == 0:
-                result.y_dual[n] = 0
+                result.y_dual[n] = cost_line[n]
     return result
 
 
