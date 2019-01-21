@@ -623,6 +623,8 @@ def ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s):
     y_sub   = model.addVars(Para.N_sub  )  # Substation
     y_wind  = model.addVars(Para.N_wind )  # Wind farm
     y_solar = model.addVars(Para.N_solar)  # PV station
+    y_pos   = model.addVars(Para.N_line )  # line
+    y_neg   = model.addVars(Para.N_line )  # line
 
     # Create power flow variables
     N_V_bus   = 0  # Square of bus voltage
@@ -647,7 +649,7 @@ def ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s):
     obj = obj + quicksum(Var[N_S_solar + n] * Para.Cost_solar    for n in range(Para.N_solar))
     obj = obj + quicksum(Var[N_C_solar + n] * Para.Cost_cutsolar for n in range(Para.N_solar))
     obj = obj * Para.N_day_year * Para.N_hour * 5
-
+    '''
     Rec_rate = 0  # Reconvery rate in 5 years
     for y in range(Para.N_year_of_stage):
         Rec_rate = Rec_rate + (1 + Para.Int_rate) ** (-(y + 1))
@@ -655,11 +657,10 @@ def ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s):
     obj = obj + quicksum(Rec_rate * y_sub  [n] * Para.Sub  [n,3] * Para.Dep_sub   for n in range(Para.N_sub  ))
     obj = obj + quicksum(Rec_rate * y_wind [n] * Para.Wind [n,3] * Para.Dep_wind  for n in range(Para.N_wind ))
     obj = obj + quicksum(Rec_rate * y_solar[n] * Para.Solar[n,3] * Para.Dep_solar for n in range(Para.N_solar))
-
     cost_line = np.zeros(Para.N_line)
     for n in range(Para.N_line):
         cost_line[n] = Para.Line [n,7] * Para.Dep_line * Rec_rate
-
+    '''
     model.setObjective(obj, GRB.MINIMIZE)
 
     N_con = []  # indexing constraints
@@ -791,6 +792,8 @@ def ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s):
     model.addConstrs(y_sub  [n] == Result_Reconfig.y_sub  [n] for n in range(Para.N_sub  ))
     model.addConstrs(y_wind [n] == Result_Reconfig.y_wind [n] for n in range(Para.N_wind ))
     model.addConstrs(y_solar[n] == Result_Reconfig.y_solar[n] for n in range(Para.N_solar))
+    model.addConstrs(y_pos  [n] == Result_Reconfig.y_pos  [n] for n in range(Para.N_line ))
+    model.addConstrs(y_neg  [n] == Result_Reconfig.y_neg  [n] for n in range(Para.N_line ))
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 8
 
@@ -798,10 +801,12 @@ def ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s):
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
         result = ResultReconfigDual(model,Para,N_con,Result_Planning)
+        '''
         # Modify the dual information
         for n in range(Para.N_line):
             if Result_Planning.x_line[n] == 1 and Result_Reconfig.y_line[n] == 0:
                 result.y_dual[n] = cost_line[n]
+        '''
     return result
 
 
@@ -1085,12 +1090,13 @@ if __name__ == "__main__":
         for s in range(Para.N_scenario):
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
+            Result_Relax = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
             Logic.append(Result_Dual)
             obj_opr = obj_opr + Result_Reconfig.obj
         lower_bound.append(Result_Planning.obj)
         upper_bound.append(Result_Planning.obj_con + obj_opr)
         gap = (upper_bound[n_iter]-lower_bound[n_iter])/upper_bound[n_iter]
-        if gap <= 1e-5 or n_iter > 250:
+        if gap <= 1e-2 or n_iter > 250:
             break
         else:
             n_iter = n_iter + 1
