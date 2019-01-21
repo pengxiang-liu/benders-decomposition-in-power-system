@@ -128,36 +128,31 @@ class ResultPlanning(object):
         self.x_solar = [int(round(x_solar[i].x)) for i in range(Para.N_solar)]
         self.x_star  = self.x_line + self.x_sub + self.x_wind + self.x_solar
         self.obj_con = obj_con.getValue()
-        self.obj_opr = obj_opr.x
+        self.obj_opr = obj_opr.getValue()
         self.obj = (model.getObjective()).getValue()  # objective
 
 
 # This class restores the results of reconfiguration sub-problem
 class ResultReconfig(object):
-    def __init__(self,model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var,N_con):
+    def __init__(self,model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var):
         # Reconfiguration variable
-        self.y_line  = [int(round(y_line [i].x)) for i in range(Para.N_line )]
-        self.y_sub   = [int(round(y_sub  [i].x)) for i in range(Para.N_sub  )]
-        self.y_wind  = [int(round(y_wind [i].x)) for i in range(Para.N_wind )]
-        self.y_solar = [int(round(y_solar[i].x)) for i in range(Para.N_solar)]
-        self.y_pos   = [int(round(y_pos  [i].x)) for i in range(Para.N_line )]
-        self.y_neg   = [int(round(y_neg  [i].x)) for i in range(Para.N_line )]
+        self.y_line  = [[int(round(y_line [i,s].x)) for i in range(Para.N_line )] for s in range(Para.N_scenario)]
+        self.y_sub   = [[int(round(y_sub  [i,s].x)) for i in range(Para.N_sub  )] for s in range(Para.N_scenario)]
+        self.y_wind  = [[int(round(y_wind [i,s].x)) for i in range(Para.N_wind )] for s in range(Para.N_scenario)]
+        self.y_solar = [[int(round(y_solar[i,s].x)) for i in range(Para.N_solar)] for s in range(Para.N_scenario)]
+        self.y_pos   = [[int(round(y_pos  [i,s].x)) for i in range(Para.N_line )] for s in range(Para.N_scenario)]
+        self.y_neg   = [[int(round(y_neg  [i,s].x)) for i in range(Para.N_line )] for s in range(Para.N_scenario)]
         # Power flow variable
-        self.V_bus   = [Var[N_V_bus   + i].x for i in range(Para.N_bus  )]
-        self.P_line  = [Var[N_P_line  + i].x for i in range(Para.N_line )]
-        self.Q_line  = [Var[N_Q_line  + i].x for i in range(Para.N_line )]
-        self.P_sub   = [Var[N_P_sub   + i].x for i in range(Para.N_sub  )]
-        self.Q_sub   = [Var[N_Q_sub   + i].x for i in range(Para.N_sub  )]
-        self.C_load  = [Var[N_C_load  + i].x for i in range(Para.N_bus  )]
-        self.S_wind  = [Var[N_S_wind  + i].x for i in range(Para.N_wind )]
-        self.C_wind  = [Var[N_C_wind  + i].x for i in range(Para.N_wind )]
-        self.S_solar = [Var[N_S_solar + i].x for i in range(Para.N_solar)]
-        self.C_solar = [Var[N_C_solar + i].x for i in range(Para.N_solar)]
-        # Objective
-        constr = model.getConstrs()
-        self.N_con = N_con
-        self.obj   = (model.getObjective()).getValue()
-        self.rhs   = np.array([constr[n].rhs for n in range(N_con[-1])])
+        self.V_bus   = [[Var[N_V_bus   + i,s].x for i in range(Para.N_bus  )] for s in range(Para.N_scenario)]
+        self.P_line  = [[Var[N_P_line  + i,s].x for i in range(Para.N_line )] for s in range(Para.N_scenario)]
+        self.Q_line  = [[Var[N_Q_line  + i,s].x for i in range(Para.N_line )] for s in range(Para.N_scenario)]
+        self.P_sub   = [[Var[N_P_sub   + i,s].x for i in range(Para.N_sub  )] for s in range(Para.N_scenario)]
+        self.Q_sub   = [[Var[N_Q_sub   + i,s].x for i in range(Para.N_sub  )] for s in range(Para.N_scenario)]
+        self.C_load  = [[Var[N_C_load  + i,s].x for i in range(Para.N_bus  )] for s in range(Para.N_scenario)]
+        self.S_wind  = [[Var[N_S_wind  + i,s].x for i in range(Para.N_wind )] for s in range(Para.N_scenario)]
+        self.C_wind  = [[Var[N_C_wind  + i,s].x for i in range(Para.N_wind )] for s in range(Para.N_scenario)]
+        self.S_solar = [[Var[N_S_solar + i,s].x for i in range(Para.N_solar)] for s in range(Para.N_scenario)]
+        self.C_solar = [[Var[N_C_solar + i,s].x for i in range(Para.N_solar)] for s in range(Para.N_scenario)]
 
 
 # This function input data from Excel files. The filtname can be changed to other
@@ -204,7 +199,7 @@ def Depreciation(Life,Rate):
 # This function creates the upper-level planning problem (MILP), The Logic-based
 # Benders cut is added iteratively
 #
-def Planning(Para,Info,Logic,n_iter):
+def Planning(Para,Info):
     #
     # minimize
     #       Investment costs of line, substation, wind farm and PV station
@@ -215,6 +210,8 @@ def Planning(Para,Info,Logic,n_iter):
     #       4) The planning solution should remain connected
     #
     model = Model()
+    global N_V_bus,  N_P_line, N_Q_line, N_P_sub, N_Q_sub
+    global N_C_load, N_S_wind, N_C_wind, N_S_solar, N_C_solar
     # Create investment variables
     x_line  = model.addVars(Para.N_line,  vtype = GRB.BINARY)  # line
     x_sub   = model.addVars(Para.N_sub,   vtype = GRB.BINARY)  # Substation
@@ -319,365 +316,136 @@ def Planning(Para,Info,Logic,n_iter):
         tp_solar = Para.Solar[:,2] * Para.Typical_solar[s]  # solar
         # 0.Reconfiguration
         for n in range(Para.N_line):
-            model.addConstr(y_line [n] <= x_line [n])
+            model.addConstr(y_line [n,s] <= x_line [n])
         for n in range(Para.N_sub):
-            model.addConstr(y_sub  [n] <= x_sub  [n])
+            model.addConstr(y_sub  [n,s] <= x_sub  [n])
         for n in range(Para.N_wind):
-            model.addConstr(y_wind [n] <= x_wind [n])
+            model.addConstr(y_wind [n,s] <= x_wind [n])
         for n in range(Para.N_solar):
-            model.addConstr(y_solar[n] <= x_solar[n])
+            model.addConstr(y_solar[n,s] <= x_solar[n])
         # 1.Radial topology
         for n in range(Para.N_bus):
             line_head = Info.Line_head[n]
             line_tail = Info.Line_tail[n]
-            expr = quicksum(y_pos[i] for i in line_tail) + quicksum(y_neg[i] for i in line_head)
+            expr = quicksum(y_pos[i,s] for i in line_tail) + quicksum(y_neg[i,s] for i in line_head)
             if Para.Load[n] > 0:  # load bus
                 model.addConstr(expr == 1)
             else:  # none load bus
                 model.addConstr(expr == 0)
         for n in range(Para.N_line):
-            model.addConstr(y_pos[n] + y_neg[n] == y_line[n])
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 1
+            model.addConstr(y_pos[n,s] + y_neg[n,s] == y_line[n,s])
 
         # 2.Active power balance equation
         for n in range(Para.N_bus):
             line_head = Info.Line_head[n]
             line_tail = Info.Line_tail[n]
             expr = LinExpr()
-            expr = expr - quicksum(Var[N_P_line + i] for i in line_head)  # power out
-            expr = expr + quicksum(Var[N_P_line + i] for i in line_tail)  # power in
-            expr = expr + Var[N_C_load + n] * Para.Load_angle  # load shedding
+            expr = expr - quicksum(Var[N_P_line + i,s] for i in line_head)  # power out
+            expr = expr + quicksum(Var[N_P_line + i,s] for i in line_tail)  # power in
+            expr = expr + Var[N_C_load + n,s] * Para.Load_angle  # load shedding
             if  Info.Sub[n]   != []:
-                expr = expr + Var[N_P_sub + Info.Sub[n][0]]
+                expr = expr + Var[N_P_sub + Info.Sub[n][0],s]
             if  Info.Wind[n]  != []:
-                expr = expr + Var[N_S_wind + Info.Wind[n][0]] * Para.Wind_angle
+                expr = expr + Var[N_S_wind + Info.Wind[n][0],s] * Para.Wind_angle
             if  Info.Solar[n] != []:
-                expr = expr + Var[N_S_solar + Info.Solar[n][0]] * Para.Solar_angle
+                expr = expr + Var[N_S_solar + Info.Solar[n][0],s] * Para.Solar_angle
             model.addConstr(expr == tp_load[n] * Para.Load_angle)
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 2
 
         # 3.Reactive power balance equation
         for n in range(Para.N_bus):
             line_head = Info.Line_head[n]
             line_tail = Info.Line_tail[n]
             expr = LinExpr()
-            expr = expr - quicksum(Var[N_Q_line + i] for i in line_head)  # power out
-            expr = expr + quicksum(Var[N_Q_line + i] for i in line_tail)  # power in
-            expr = expr + Var[N_C_load + n] * math.sqrt(1-Para.Load_angle**2)  # load shedding
+            expr = expr - quicksum(Var[N_Q_line + i,s] for i in line_head)  # power out
+            expr = expr + quicksum(Var[N_Q_line + i,s] for i in line_tail)  # power in
+            expr = expr + Var[N_C_load + n,s] * math.sqrt(1-Para.Load_angle**2)  # load shedding
             if  Info.Sub[n]   != []:
-                expr = expr + Var[N_Q_sub + Info.Sub[n][0]]
+                expr = expr + Var[N_Q_sub + Info.Sub[n][0],s]
             if  Info.Wind[n]  != []:
-                expr = expr + Var[N_S_wind + Info.Wind[n][0]] * math.sqrt(1 - Para.Wind_angle ** 2)
+                expr = expr + Var[N_S_wind + Info.Wind[n][0],s] * math.sqrt(1 - Para.Wind_angle ** 2)
             if  Info.Solar[n] != []:
-                expr = expr + Var[N_S_solar + Info.Solar[n][0]] * math.sqrt(1 - Para.Solar_angle ** 2)
+                expr = expr + Var[N_S_solar + Info.Solar[n][0],s] * math.sqrt(1 - Para.Solar_angle ** 2)
             model.addConstr(expr == tp_load[n] * math.sqrt(1 - Para.Load_angle ** 2))
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 3
 
         # 4.Voltage balance on line
         for n in range(Para.N_line):
             bus_head = Para.Line[n,1]
             bus_tail = Para.Line[n,2]
             expr = LinExpr()
-            expr = expr + Var[N_V_bus + bus_head] - Var[N_V_bus + bus_tail]  # voltage difference
-            expr = expr - Var[N_P_line + n] * 2 * Para.Line_R[n]
-            expr = expr - Var[N_Q_line + n] * 2 * Para.Line_X[n]
-            model.addConstr(expr >= -Para.Big_M * (1 - y_line[n]))
-            model.addConstr(expr <=  Para.Big_M * (1 - y_line[n]))
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 4
+            expr = expr + Var[N_V_bus + bus_head,s] - Var[N_V_bus + bus_tail,s]  # voltage difference
+            expr = expr - Var[N_P_line + n,s] * 2 * Para.Line_R[n]
+            expr = expr - Var[N_Q_line + n,s] * 2 * Para.Line_X[n]
+            model.addConstr(expr >= -Para.Big_M * (1 - y_line[n,s]))
+            model.addConstr(expr <=  Para.Big_M * (1 - y_line[n,s]))
 
         # 5.Renewables(wind farm)
         for n in range(Para.N_wind):
-            expr = Var[N_S_wind  + n] + Var[N_C_wind  + n]
-            model.addConstr(expr == y_wind[n] * tp_wind [n])
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 5
+            expr = Var[N_S_wind  + n,s] + Var[N_C_wind  + n,s]
+            model.addConstr(expr == y_wind[n,s] * tp_wind [n])
 
         # 6.Renewables(solar station)
         for n in range(Para.N_solar):
-            expr = Var[N_S_solar + n] + Var[N_C_solar + n]
-            model.addConstr(expr == y_solar[n] * tp_solar[n])
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 6
+            expr = Var[N_S_solar + n,s] + Var[N_C_solar + n,s]
+            model.addConstr(expr == y_solar[n,s] * tp_solar[n])
 
         # 7.Linearization of quadratic terms
         for n in range(Para.N_line):
-            expr = Var[N_P_line + n] + Var[N_Q_line + n]
-            model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
-            model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
-            expr = Var[N_P_line + n] - Var[N_Q_line + n]
-            model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
-            model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 7
+            expr = Var[N_P_line + n,s] + Var[N_Q_line + n,s]
+            model.addConstr(expr >= -math.sqrt(2) * y_line[n,s] * Para.Line_S[n])
+            model.addConstr(expr <=  math.sqrt(2) * y_line[n,s] * Para.Line_S[n])
+            expr = Var[N_P_line + n,s] - Var[N_Q_line + n,s]
+            model.addConstr(expr >= -math.sqrt(2) * y_line[n,s] * Para.Line_S[n])
+            model.addConstr(expr <=  math.sqrt(2) * y_line[n,s] * Para.Line_S[n])
 
         # 8.Linearization of quadratic terms
         for n in range(Para.N_sub):
-            expr = Var[N_P_sub + n] + Var[N_Q_sub + n]
+            expr = Var[N_P_sub + n,s] + Var[N_Q_sub + n,s]
             model.addConstr(expr >= 0)
-            model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
-            expr = Var[N_P_sub + n] - Var[N_Q_sub + n]
+            model.addConstr(expr <= math.sqrt(2) * y_sub[n,s] * Para.Sub_S[n])
+            expr = Var[N_P_sub + n,s] - Var[N_Q_sub + n,s]
             model.addConstr(expr >= 0)
-            model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 8
+            model.addConstr(expr <= math.sqrt(2) * y_sub[n,s] * Para.Sub_S[n])
 
         # 9.bounds of variables
         # 1) Voltage
         for n in range(Para.N_bus):
-            model.addConstr(Var[N_V_bus + n] >= Para.Voltage_low ** 2)
-            model.addConstr(Var[N_V_bus + n] <= Para.Voltage_upp ** 2)
+            model.addConstr(Var[N_V_bus + n,s] >= Para.Voltage_low ** 2)
+            model.addConstr(Var[N_V_bus + n,s] <= Para.Voltage_upp ** 2)
         # 2) Power flow
         for n in range(Para.N_line):
-            model.addConstr(Var[N_P_line + n] >= -y_line[n] * Cap_line[n])
-            model.addConstr(Var[N_P_line + n] <=  y_line[n] * Cap_line[n])
+            model.addConstr(Var[N_P_line + n,s] >= -y_line[n,s] * Para.Line_S[n])
+            model.addConstr(Var[N_P_line + n,s] <=  y_line[n,s] * Para.Line_S[n])
         for n in range(Para.N_line):
-            model.addConstr(Var[N_Q_line + n] >= -y_line[n] * Cap_line[n])
-            model.addConstr(Var[N_Q_line + n] <=  y_line[n] * Cap_line[n])
+            model.addConstr(Var[N_Q_line + n,s] >= -y_line[n,s] * Para.Line_S[n])
+            model.addConstr(Var[N_Q_line + n,s] <=  y_line[n,s] * Para.Line_S[n])
         # 3) Substation
         for n in range(Para.N_sub):
-            model.addConstr(Var[N_P_sub + n] >= 0)
-            model.addConstr(Var[N_P_sub + n] <= y_sub[n] * Cap_sub[n])
+            model.addConstr(Var[N_P_sub + n,s] >= 0)
+            model.addConstr(Var[N_P_sub + n,s] <= y_sub[n,s] * Para.Sub_S[n])
         for n in range(Para.N_sub):
-            model.addConstr(Var[N_Q_sub + n] >= 0)
-            model.addConstr(Var[N_Q_sub + n] <= y_sub[n] * Cap_sub[n])
+            model.addConstr(Var[N_Q_sub + n,s] >= 0)
+            model.addConstr(Var[N_Q_sub + n,s] <= y_sub[n,s] * Para.Sub_S[n])
         # 4) Load shedding
         for n in range(Para.N_bus):
-            model.addConstr(Var[N_C_load + n] >= 0)
-            model.addConstr(Var[N_C_load + n] <= tp_load[n])
+            model.addConstr(Var[N_C_load + n,s] >= 0)
+            model.addConstr(Var[N_C_load + n,s] <= tp_load[n])
         # 5) Renewables
         for n in range(Para.N_wind):
-            model.addConstr(Var[N_S_wind + n] >= 0)
-            model.addConstr(Var[N_S_wind + n] <= y_wind[n] * tp_wind[n])
-            model.addConstr(Var[N_C_wind + n] >= 0)
-            model.addConstr(Var[N_C_wind + n] <= y_wind[n] * tp_wind[n])
+            model.addConstr(Var[N_S_wind + n,s] >= 0)
+            model.addConstr(Var[N_S_wind + n,s] <= y_wind[n,s] * tp_wind[n])
+            model.addConstr(Var[N_C_wind + n,s] >= 0)
+            model.addConstr(Var[N_C_wind + n,s] <= y_wind[n,s] * tp_wind[n])
         for n in range(Para.N_solar):
-            model.addConstr(Var[N_S_solar + n] >= 0)
-            model.addConstr(Var[N_S_solar + n] <= y_solar[n] * tp_solar[n])
-            model.addConstr(Var[N_C_solar + n] >= 0)
-            model.addConstr(Var[N_C_solar + n] <= y_solar[n] * tp_solar[n])
-        model.update()
-        N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 9
+            model.addConstr(Var[N_S_solar + n,s] >= 0)
+            model.addConstr(Var[N_S_solar + n,s] <= y_solar[n,s] * tp_solar[n])
+            model.addConstr(Var[N_C_solar + n,s] >= 0)
+            model.addConstr(Var[N_C_solar + n,s] <= y_solar[n,s] * tp_solar[n])
     # Optimize    
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultPlanning(model,Para,x_line,x_sub,x_wind,x_solar,obj_con,obj_opr)
-    return result
-
-
-# This function creates the reconfiguration sub-problem (MILP). After the problem is solved,
-# the binary reconfiguration variables are fixed and dual variables are returned for further
-# analysis and operation. Note that the problem is formulated under a given scenario 's' of 
-# typical day 'd' at stage 't'.
-#
-def Reconfig(Para,Info,Result_Planning,s):
-    #
-    # minimize
-    #       Costs of power purchasing, load shedding, renewables generation and curtailment 
-    # subject to
-    #       1) Reconfiguration
-    #       2) Radial topology
-    #       3) Optimal Power flow
-    #       4) Upper and lower bound
-    #
-    model = Model()
-    # Typical data
-    tp_load  = Para.Load * Para.Typical_load[s]  # load
-    tp_wind  = Para.Wind [:,2] * Para.Typical_wind [s]  # wind
-    tp_solar = Para.Solar[:,2] * Para.Typical_solar[s]  # solar
-    # Capacity data
-    Cap_line = [Result_Planning.x_line[n] * Para.Line_S[n] for n in range(Para.N_line)]
-    Cap_sub  = [Result_Planning.x_sub [n] * Para.Sub_S [n] for n in range(Para.N_sub )]
-
-    # Create reconfiguration variables
-    y_line  = model.addVars(Para.N_line, vtype = GRB.BINARY)  # line
-    y_sub   = model.addVars(Para.N_sub,  vtype = GRB.BINARY)  # Substation
-    y_wind  = model.addVars(Para.N_wind, vtype = GRB.BINARY)  # Wind farm
-    y_solar = model.addVars(Para.N_solar,vtype = GRB.BINARY)  # PV station
-    y_pos   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # positive line flow
-    y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
-    # Create power flow variables
-    N_V_bus   = 0  # Square of bus voltage
-    N_P_line  = N_V_bus   + Para.N_bus    # Active power flow of line
-    N_Q_line  = N_P_line  + Para.N_line   # Reactive power flow of line
-    N_P_sub   = N_Q_line  + Para.N_line   # Active power injection at substation
-    N_Q_sub   = N_P_sub   + Para.N_sub    # Reactive power injection at substation
-    N_C_load  = N_Q_sub   + Para.N_sub    # Load shedding
-    N_S_wind  = N_C_load  + Para.N_bus    # Wind output
-    N_C_wind  = N_S_wind  + Para.N_wind   # Wind curtailment
-    N_S_solar = N_C_wind  + Para.N_wind   # Solar output
-    N_C_solar = N_S_solar + Para.N_solar  # Solar curtailment
-    N_Var     = N_C_solar + Para.N_solar  # Number of all variables
-    Var = model.addVars(N_Var,lb = -GRB.INFINITY)
-    
-    # Set objective
-    obj = LinExpr()
-    obj = obj + quicksum(Var[N_P_sub   + n] * Para.Cost_power    for n in range(Para.N_sub  ))
-    obj = obj + quicksum(Var[N_C_load  + n] * Para.Cost_cutload  for n in range(Para.N_bus  ))
-    obj = obj + quicksum(Var[N_S_wind  + n] * Para.Cost_wind     for n in range(Para.N_wind ))
-    obj = obj + quicksum(Var[N_C_wind  + n] * Para.Cost_cutwind  for n in range(Para.N_wind ))
-    obj = obj + quicksum(Var[N_S_solar + n] * Para.Cost_solar    for n in range(Para.N_solar))
-    obj = obj + quicksum(Var[N_C_solar + n] * Para.Cost_cutsolar for n in range(Para.N_solar))
-    obj = obj * Para.N_day_year * Para.N_hour * 5
-    model.setObjective(obj, GRB.MINIMIZE)
-
-    N_con = []  # indexing constraints
-    # 0.Reconfiguration
-    for n in range(Para.N_line):
-        model.addConstr(y_line [n] <= Result_Planning.x_line [n])
-    for n in range(Para.N_sub):
-        model.addConstr(y_sub  [n] <= Result_Planning.x_sub  [n])
-    for n in range(Para.N_wind):
-        model.addConstr(y_wind [n] <= Result_Planning.x_wind [n])
-    for n in range(Para.N_solar):
-        model.addConstr(y_solar[n] <= Result_Planning.x_solar[n])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 0
-
-    # 1.Radial topology
-    for n in range(Para.N_bus):
-        line_head = Info.Line_head[n]
-        line_tail = Info.Line_tail[n]
-        expr = quicksum(y_pos[i] for i in line_tail) + quicksum(y_neg[i] for i in line_head)
-        if Para.Load[n] > 0:  # load bus
-            model.addConstr(expr == 1)
-        else:  # none load bus
-            model.addConstr(expr == 0)
-    for n in range(Para.N_line):
-        model.addConstr(y_pos[n] + y_neg[n] - y_line[n] == 0)
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 1
-
-    # 2.Active power balance equation
-    for n in range(Para.N_bus):
-        line_head = Info.Line_head[n]
-        line_tail = Info.Line_tail[n]
-        expr = LinExpr()
-        expr = expr - quicksum(Var[N_P_line + i] for i in line_head)  # power out
-        expr = expr + quicksum(Var[N_P_line + i] for i in line_tail)  # power in
-        expr = expr + Var[N_C_load + n] * Para.Load_angle  # load shedding
-        if  Info.Sub[n]   != []:
-            expr = expr + Var[N_P_sub + Info.Sub[n][0]]
-        if  Info.Wind[n]  != []:
-            expr = expr + Var[N_S_wind + Info.Wind[n][0]] * Para.Wind_angle
-        if  Info.Solar[n] != []:
-            expr = expr + Var[N_S_solar + Info.Solar[n][0]] * Para.Solar_angle
-        model.addConstr(expr == tp_load[n] * Para.Load_angle)
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 2
-
-    # 3.Reactive power balance equation
-    for n in range(Para.N_bus):
-        line_head = Info.Line_head[n]
-        line_tail = Info.Line_tail[n]
-        expr = LinExpr()
-        expr = expr - quicksum(Var[N_Q_line + i] for i in line_head)  # power out
-        expr = expr + quicksum(Var[N_Q_line + i] for i in line_tail)  # power in
-        expr = expr + Var[N_C_load + n] * math.sqrt(1-Para.Load_angle**2)  # load shedding
-        if  Info.Sub[n]   != []:
-            expr = expr + Var[N_Q_sub + Info.Sub[n][0]]
-        if  Info.Wind[n]  != []:
-            expr = expr + Var[N_S_wind + Info.Wind[n][0]] * math.sqrt(1 - Para.Wind_angle ** 2)
-        if  Info.Solar[n] != []:
-            expr = expr + Var[N_S_solar + Info.Solar[n][0]] * math.sqrt(1 - Para.Solar_angle ** 2)
-        model.addConstr(expr == tp_load[n] * math.sqrt(1 - Para.Load_angle ** 2))
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 3
-
-    # 4.Voltage balance on line
-    for n in range(Para.N_line):
-        bus_head = Para.Line[n,1]
-        bus_tail = Para.Line[n,2]
-        expr = LinExpr()
-        expr = expr + Var[N_V_bus + bus_head] - Var[N_V_bus + bus_tail]  # voltage difference
-        expr = expr - Var[N_P_line + n] * 2 * Para.Line_R[n]
-        expr = expr - Var[N_Q_line + n] * 2 * Para.Line_X[n]
-        model.addConstr(expr >= -Para.Big_M * (1 - y_line[n]))
-        model.addConstr(expr <=  Para.Big_M * (1 - y_line[n]))
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 4
-
-    # 5.Renewables(wind farm)
-    for n in range(Para.N_wind):
-        expr = Var[N_S_wind  + n] + Var[N_C_wind  + n]
-        model.addConstr(expr == y_wind[n] * tp_wind [n])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 5
-
-    # 6.Renewables(solar station)
-    for n in range(Para.N_solar):
-        expr = Var[N_S_solar + n] + Var[N_C_solar + n]
-        model.addConstr(expr == y_solar[n] * tp_solar[n])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 6
-
-    # 7.Linearization of quadratic terms
-    for n in range(Para.N_line):
-        expr = Var[N_P_line + n] + Var[N_Q_line + n]
-        model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
-        model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
-        expr = Var[N_P_line + n] - Var[N_Q_line + n]
-        model.addConstr(expr >= -math.sqrt(2) * y_line[n] * Cap_line[n])
-        model.addConstr(expr <=  math.sqrt(2) * y_line[n] * Cap_line[n])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 7
-
-    # 8.Linearization of quadratic terms
-    for n in range(Para.N_sub):
-        expr = Var[N_P_sub + n] + Var[N_Q_sub + n]
-        model.addConstr(expr >= 0)
-        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
-        expr = Var[N_P_sub + n] - Var[N_Q_sub + n]
-        model.addConstr(expr >= 0)
-        model.addConstr(expr <= math.sqrt(2) * y_sub[n] * Cap_sub[n])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 8
-
-    # 9.bounds of variables
-    # 1) Voltage
-    for n in range(Para.N_bus):
-        model.addConstr(Var[N_V_bus + n] >= Para.Voltage_low ** 2)
-        model.addConstr(Var[N_V_bus + n] <= Para.Voltage_upp ** 2)
-    # 2) Power flow
-    for n in range(Para.N_line):
-        model.addConstr(Var[N_P_line + n] >= -y_line[n] * Cap_line[n])
-        model.addConstr(Var[N_P_line + n] <=  y_line[n] * Cap_line[n])
-    for n in range(Para.N_line):
-        model.addConstr(Var[N_Q_line + n] >= -y_line[n] * Cap_line[n])
-        model.addConstr(Var[N_Q_line + n] <=  y_line[n] * Cap_line[n])
-    # 3) Substation
-    for n in range(Para.N_sub):
-        model.addConstr(Var[N_P_sub + n] >= 0)
-        model.addConstr(Var[N_P_sub + n] <= y_sub[n] * Cap_sub[n])
-    for n in range(Para.N_sub):
-        model.addConstr(Var[N_Q_sub + n] >= 0)
-        model.addConstr(Var[N_Q_sub + n] <= y_sub[n] * Cap_sub[n])
-    # 4) Load shedding
-    for n in range(Para.N_bus):
-        model.addConstr(Var[N_C_load + n] >= 0)
-        model.addConstr(Var[N_C_load + n] <= tp_load[n])
-    # 5) Renewables
-    for n in range(Para.N_wind):
-        model.addConstr(Var[N_S_wind + n] >= 0)
-        model.addConstr(Var[N_S_wind + n] <= y_wind[n] * tp_wind[n])
-        model.addConstr(Var[N_C_wind + n] >= 0)
-        model.addConstr(Var[N_C_wind + n] <= y_wind[n] * tp_wind[n])
-    for n in range(Para.N_solar):
-        model.addConstr(Var[N_S_solar + n] >= 0)
-        model.addConstr(Var[N_S_solar + n] <= y_solar[n] * tp_solar[n])
-        model.addConstr(Var[N_C_solar + n] >= 0)
-        model.addConstr(Var[N_C_solar + n] <= y_solar[n] * tp_solar[n])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 9
-
-    # Optimize
-    model.optimize()
-    if model.status == GRB.Status.OPTIMAL:
-        result = ResultReconfig(model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var,N_con)
-    return result
+        res_planning = ResultPlanning(model,Para,x_line,x_sub,x_wind,x_solar,obj_con,obj_opr)
+        res_reconfig = ResultReconfig(model,Para,y_line,y_sub,y_wind,y_solar,y_pos,y_neg,Var)
+    return res_planning,res_reconfig
 
 
 # This function plots the planning solution in all stages
@@ -709,7 +477,7 @@ def PlotPlanning(Para,x_line):
 # This function plots the reconfiguration solution under a given scenario
 # 
 #
-def PlotReconfiguration(Para,y_line):
+def PlotReconfiguration(Para,y_line,s):
     x = Para.Bus[:,2]
     y = Para.Bus[:,3]
     for n in range(Para.N_bus):  # Bus
@@ -723,7 +491,7 @@ def PlotReconfiguration(Para,y_line):
         y1 = y[int(round(Para.Line[n,1]))]
         x2 = x[int(round(Para.Line[n,2]))]
         y2 = y[int(round(Para.Line[n,2]))]
-        if y_line[n] == 1:
+        if y_line[n,s] == 1:
             plt.plot([x1,x2],[y1,y2],'r-')
         else:
             plt.plot([x1,x2],[y1,y2],'b--')
@@ -738,30 +506,9 @@ if __name__ == "__main__":
     filename = "../data/Data-IEEE-24-build.xlsx"
     [Para,Info] = ReadData(filename)
     
-    # Logic-based Benders decomposition
-    n_iter = 0  # index of iteration
-    Logic = []  # Set of dual information
-    lower_bound = []  # 
-    upper_bound = []  #
-    while True:
-        Result_Planning = Planning(Para,Info,Logic,n_iter)
-        obj_opr = 0
-        for s in range(Para.N_scenario):
-            Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
-            Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
-            Logic.append(Result_Dual)
-            obj_opr = obj_opr + Result_Reconfig.obj
-        lower_bound.append(Result_Planning.obj)
-        upper_bound.append(Result_Planning.obj_con + obj_opr)
-        gap = (upper_bound[n_iter]-lower_bound[n_iter])/upper_bound[n_iter]
-        if gap <= 1e-5 or n_iter > 250:
-            break
-        else:
-            n_iter = n_iter + 1
+    [Result_Planning,Result_Reconfig] = Planning(Para,Info)
+        
     PlotPlanning(Para,Result_Planning.x_line)
-    plt.plot(lower_bound)
-    plt.plot(upper_bound)
-    plt.show()
     
     time_end=time.time()
     print('totally cost',time_end-time_start)
