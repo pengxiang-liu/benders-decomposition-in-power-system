@@ -382,6 +382,7 @@ def Planning(Para,Info,Relax,Logic,n_iter):
         model.addConstr(obj_opr == 0)
     else:
         for i in range(n_iter):
+            
             # Basic Benders cut
             dual_x = np.zeros(53)
             dual_f = 0
@@ -394,8 +395,8 @@ def Planning(Para,Info,Relax,Logic,n_iter):
                 dual_x = dual_x + dual[0:53]
                 dual_f = dual_f + beta
             model.addConstr(obj_opr >= dual_f + quicksum(dual_x[n] * (x_var[n] - x_star[n]) for n in range(53)))
-            # Logic Benders cut
             '''
+            # Logic Benders cut
             logic_expr = LinExpr()
             for s in range(2*i, 2*i + Para.N_scenario):
                 c    = Logic[s].c
@@ -420,15 +421,15 @@ def Planning(Para,Info,Relax,Logic,n_iter):
                         model.addConstr((logic_var[k] == 0) >> (expr >= 0.001))
                 # Add Benders cut
                 model.addConstr(logic_and == and_(logic_var)) # logic and
-                sum_cj = 0 # sum of cj
                 
+                sum_cj = d # sum of cj
                 for k in range(len(c)):
                     if c[k] > 0:
                         sum_cj = sum_cj + 0
                     else:
                         sum_cj = sum_cj + c[k]
                 
-                logic_expr = logic_expr + (Logic[i].obj - sum_cj) * logic_and
+                logic_expr = logic_expr + (Logic[s].obj - sum_cj) * logic_and
             model.addConstr(obj_opr >= sum_cj + logic_expr)
             '''
     # Optimize    
@@ -1238,11 +1239,9 @@ if __name__ == "__main__":
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
             Result_Relax = ReconfigRelax_Origin(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
-            #Result_Logic = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
-            print(max(abs(np.array(Result_Dual.x_star) - np.array(Result_Relax.x_star))))
-            print(Result_Dual.obj - Result_Relax.obj)
+            # Result_Logic = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
             Relax.append(Result_Relax)
-            #Logic.append(Result_Logic)
+            # Logic.append(Result_Logic)
             obj_opr = obj_opr + Result_Reconfig.obj
         lower_bound.append(Result_Planning.obj)
         upper_bound.append(Result_Planning.obj_con + obj_opr)
