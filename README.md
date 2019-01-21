@@ -1,5 +1,6 @@
 # LogicBenders
 A distribution system planning model using logic-based Benders decomposition
+NOTE: This project is still under development...
 
 # Introduction
 1. Distribution system planning
