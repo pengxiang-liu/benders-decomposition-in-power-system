@@ -927,7 +927,7 @@ def ReconfigRelax_Origin(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s
         model.addConstr(y_solar[n] <= x_solar[n])
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 0
-
+    
     # 1.Radial topology
     for n in range(Para.N_bus):
         line_head = Info.Line_head[n]
@@ -941,7 +941,7 @@ def ReconfigRelax_Origin(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s
         model.addConstr(y_pos[n] + y_neg[n] - y_line[n] == 0)
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 1
-
+    
     # 2.Planning
     model.addConstrs(x_line [n] == Result_Planning.x_line [n] for n in range(Para.N_line ))
     model.addConstrs(x_sub  [n] == Result_Planning.x_sub  [n] for n in range(Para.N_sub  ))
@@ -992,7 +992,7 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s):
 
     # Formulate objective matrics
     c = np.array(Result_Dual.y_dual)
-    d = Result_Reconfig.obj - np.inner(c,np.array(Result_Dual.y_star))
+    d = Result_Dual.obj - np.inner(c,np.array(Result_Dual.y_star))
     # Formulate constraint matrics
     A = np.eye(N_y_var)  # reconfiguration
     A = -A[0:N_con[0],:]  # transform a <= b to -a >= -b
@@ -1006,6 +1006,7 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s):
             A_temp[N_y_neg + i] = 1
         A = np.append(A, [ A_temp], axis = 0)  #  expr >=  1
         A = np.append(A, [-A_temp], axis = 0)  # -expr >= -1
+    '''
     for n in range(Para.N_line):  # y_pos & y_neg
         A_temp = np.zeros(N_y_var)
         A_temp[N_y_pos  + n] =  1
@@ -1013,12 +1014,15 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s):
         A_temp[N_y_line + n] = -1
         A = np.append(A, [ A_temp], axis = 0)  #  expr >=  0
         A = np.append(A, [-A_temp], axis = 0)  # -expr >= -0
+    '''
     # Right-hand side value
     rhs = np.array(Result_Planning.x_star) 
     rhs = (-1) * rhs  # negate
-    for n in range(N_con[0],N_con[1]):
-        rhs = np.append(rhs,  Result_Reconfig.rhs[n])
-        rhs = np.append(rhs, -Result_Reconfig.rhs[n])
+    
+    for n in range(N_con[0],N_con[0]+Para.N_bus):
+        rhs = np.append(rhs,  int(round(Result_Reconfig.rhs[n])))
+        rhs = np.append(rhs, -int(round(Result_Reconfig.rhs[n])))
+
     # Right-hand side constant a
     a = np.zeros(N_con[0])  # constant
     for n in range(N_con[0],N_con[1]):
@@ -1239,9 +1243,10 @@ if __name__ == "__main__":
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
             Result_Relax = ReconfigRelax_Origin(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
-            # Result_Logic = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
+            Result_Logic = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
             Relax.append(Result_Relax)
-            # Logic.append(Result_Logic)
+            Logic.append(Result_Logic)
+            print(Result_Relax.x_dual + Result_Logic.d_var[0][0:53])
             obj_opr = obj_opr + Result_Reconfig.obj
         lower_bound.append(Result_Planning.obj)
         upper_bound.append(Result_Planning.obj_con + obj_opr)
