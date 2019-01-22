@@ -1243,10 +1243,10 @@ if __name__ == "__main__":
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
             Result_Relax = ReconfigRelax_Origin(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
-            Result_Logic = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
+            #Result_Logic = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
             Relax.append(Result_Relax)
-            Logic.append(Result_Logic)
-            print(Result_Relax.x_dual + Result_Logic.d_var[0][0:53])
+            #Logic.append(Result_Logic)
+            #print(Result_Relax.x_dual + Result_Logic.d_var[0][0:53])
             obj_opr = obj_opr + Result_Reconfig.obj
         lower_bound.append(Result_Planning.obj)
         upper_bound.append(Result_Planning.obj_con + obj_opr)
