@@ -409,9 +409,16 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     tp_load  = Para.Load * Para.Typical_load[s]  # load
     tp_wind  = Para.Wind [:,2] * Para.Typical_wind [s]  # wind
     tp_solar = Para.Solar[:,2] * Para.Typical_solar[s]  # solar
+    tp_wind_ex  = np.zeros(Para.N_bus)
+    tp_solar_ex = np.zeros(Para.N_bus)
+    for n in range(Para.N_bus):
+        if  Info.Wind [n] != []:
+            tp_wind_ex [n] =  tp_wind[Info.Wind [n][0]]
+        if  Info.Solar[n] != []:
+            tp_solar_ex[n] = tp_solar[Info.Solar[n][0]]
     # Capacity data
-    Cap_line = [Result_Planning.x_line[n] * Para.Line_S[n] for n in range(Para.N_line)]
-    Cap_sub  = [Result_Planning.x_sub [n] * Para.Sub_S [n] for n in range(Para.N_sub )]
+    # Cap_line = [Result_Planning.x_line[n] * Para.Line_S[n] for n in range(Para.N_line)]
+    # Cap_sub  = [Result_Planning.x_sub [n] * Para.Sub_S [n] for n in range(Para.N_sub )]
 
     # Model
     model = Model()
@@ -472,27 +479,55 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     for n in range(Para.N_bus):
         # Load
         expr_load = LinExpr()
-        expr_load = expr_load + quicksum(tp_load[i] * Father[n,i] for i in range(Para.N_bus))
-        if  Info.Wind[n]  != []:
-            expr_load = expr_load - tp_wind [Info.Wind [n][0]]
-        if  Info.Solar[n] != []:
-            expr_load = expr_load - tp_solar[Info.Solar[n][0]]
+        expr_load = expr_load + tp_load[n] - tp_wind_ex [n] - tp_solar_ex[n]
+        for i in range(Para.N_bus):
+            expr_load = expr_load + Father[n,i] * tp_load[i]
+            expr_load = expr_load - Father[n,i] * tp_wind_ex [i]
+            expr_load = expr_load - Father[n,i] * tp_solar_ex[i]
         # Input
         if Info.Sub[n] == []:
             line_head = Info.Line_head[n]
             line_tail = Info.Line_tail[n]
             expr_line = LinExpr()
-            expr_line = expr_line + quicksum(y_pos[i] * Cap_line[i] for i in line_tail)
-            expr_line = expr_line + quicksum(y_neg[i] * Cap_line[i] for i in line_head)
+            expr_line = expr_line + quicksum(y_pos[i] * Para.Line_S[i] for i in line_tail)
+            expr_line = expr_line + quicksum(y_neg[i] * Para.Line_S[i] for i in line_head)
             model.addConstr(expr_line >= expr_load)
         else:
-            expr_sub = LinExpr(Cap_sub[Info.Sub[n][0]])
+            expr_sub = LinExpr(Para.Sub_S[Info.Sub[n][0]])
             model.addConstr(expr_sub >= expr_load)
     
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
         res = 1
+        '''
+        res_y_pos = [y_pos[i].x for i in range(Para.N_line)]
+        res_y_neg = [y_neg[i].x for i in range(Para.N_line)]
+        res_f = [[Father[i,j].x for j in range(Para.N_bus)] for i in range(Para.N_bus)]
+        load = []
+        supp = []
+        for n in range(Para.N_bus):
+            #
+            load_tmp = tp_load[n] - tp_wind_ex [n] - tp_solar_ex[n]
+            for i in range(Para.N_bus):
+                load_tmp = load_tmp + Father[n,i].x * tp_load[i]
+                load_tmp = load_tmp - Father[n,i].x * tp_wind_ex [i]
+                load_tmp = load_tmp - Father[n,i].x * tp_solar_ex[i]
+            load.append(load_tmp)
+            #
+            supp_tmp = 0
+            if Info.Sub[n] == []:
+                line_head = Info.Line_head[n]
+                line_tail = Info.Line_tail[n]
+                for i in line_tail:
+                    supp_tmp = supp_tmp + y_pos[i].x * Cap_line[i]
+                for i in line_head:
+                    supp_tmp = supp_tmp + y_neg[i].x * Cap_line[i]
+                supp.append(supp_tmp)
+            else:
+                supp.append(Cap_sub[Info.Sub[n][0]])
+        gap = np.array(supp) - np.array(load)
+        '''
     else:
         if model.status == GRB.Status.INFEASIBLE:
             res = 0
