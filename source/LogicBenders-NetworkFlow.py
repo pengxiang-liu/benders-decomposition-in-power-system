@@ -423,10 +423,6 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     # Model
     model = Model()
     # Create reconfiguration variables
-    y_line  = model.addVars(Para.N_line, vtype = GRB.BINARY)  # line
-    y_sub   = model.addVars(Para.N_sub,  vtype = GRB.BINARY)  # Substation
-    y_wind  = model.addVars(Para.N_wind, vtype = GRB.BINARY)  # Wind farm
-    y_solar = model.addVars(Para.N_solar,vtype = GRB.BINARY)  # PV station
     y_pos   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # positive line flow
     y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
     # Create matrix
@@ -439,13 +435,7 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     # Add constraints
     # 0.Reconfiguration
     for n in range(Para.N_line):
-        model.addConstr(y_line [n] <= Result_Planning.x_line [n])
-    for n in range(Para.N_sub):
-        model.addConstr(y_sub  [n] <= Result_Planning.x_sub  [n])
-    for n in range(Para.N_wind):
-        model.addConstr(y_wind [n] <= Result_Planning.x_wind [n])
-    for n in range(Para.N_solar):
-        model.addConstr(y_solar[n] <= Result_Planning.x_solar[n])
+        model.addConstr(y_pos[n] + y_neg[n] <= Result_Planning.x_line [n])
 
     # 1.Radial topology
     for n in range(Para.N_bus):
@@ -456,8 +446,6 @@ def NetworkFlow(Para,Info,Result_Planning,s):
             model.addConstr(expr == 1)
         else:  # none load bus
             model.addConstr(expr == 0)
-    for n in range(Para.N_line):
-        model.addConstr(y_pos[n] + y_neg[n] == y_line[n])
     
     # 2.Father node matrix
     
@@ -479,7 +467,7 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     for n in range(Para.N_bus):
         # Load
         expr_load = LinExpr()
-        expr_load = expr_load + tp_load[n] - tp_wind_ex [n] - tp_solar_ex[n]
+        expr_load = expr_load + tp_load[n] - tp_wind_ex[n] - tp_solar_ex[n]
         for i in range(Para.N_bus):
             expr_load = expr_load + Father[n,i] * tp_load[i]
             expr_load = expr_load - Father[n,i] * tp_wind_ex [i]
@@ -533,6 +521,8 @@ def NetworkFlow(Para,Info,Result_Planning,s):
             res = 0
         else:
             res = -1
+    constrs = model.getConstrs()
+    print(model.getCoeff(constrs[0], y_neg[0]))
     return res
 
 
@@ -1227,7 +1217,7 @@ if __name__ == "__main__":
         obj_opr = 0
         for s in range(Para.N_scenario):
             #
-            # test = NetworkFlow(Para,Info,Result_Planning,s)
+            test = NetworkFlow(Para,Info,Result_Planning,s)
             #
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
