@@ -423,10 +423,10 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     # Model
     model = Model()
     # Create reconfiguration variables
-    y_pos   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # positive line flow
-    y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
+    y_pos   = model.addVars(Para.N_line, lb = 0.0, ub = 1.0)  # positive line flow
+    y_neg   = model.addVars(Para.N_line, lb = 0.0, ub = 1.0)  # negative line flow
     # Create matrix
-    Father  = model.addVars(Para.N_bus, Para.N_bus, vtype = GRB.BINARY)
+    Father  = model.addVars(Para.N_bus, Para.N_bus, lb = 0.0, ub = 1.0)
 
     # Set objective
     obj = quicksum(Father[i,j] for i in range(Para.N_bus) for j in range(Para.N_bus))
@@ -435,7 +435,7 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     # Add constraints
     # 0.Reconfiguration
     for n in range(Para.N_line):
-        model.addConstr(y_pos[n] + y_neg[n] <= Result_Planning.x_line [n])
+        model.addConstr( -y_pos[n] - y_neg[n] >= -Result_Planning.x_line [n])
 
     # 1.Radial topology
     for n in range(Para.N_bus):
@@ -443,14 +443,17 @@ def NetworkFlow(Para,Info,Result_Planning,s):
         line_tail = Info.Line_tail[n]
         expr = quicksum(y_pos[i] for i in line_tail) + quicksum(y_neg[i] for i in line_head)
         if Para.Load[n] > 0:  # load bus
-            model.addConstr(expr == 1)
+            model.addConstr( expr >=  1)
+            model.addConstr(-expr >= -1)
         else:  # none load bus
-            model.addConstr(expr == 0)
+            model.addConstr( expr >= 0)
+            model.addConstr(-expr >= 0)
     
     # 2.Father node matrix
     
     for n in range(Para.N_bus):
-        model.addConstr(Father[n,n] == 0)
+        model.addConstr( Father[n,n] >= 0)
+        model.addConstr(-Father[n,n] >= 0)
     
     for n in range(Para.N_line):
         head = int(round(Para.Line[n,1]))
@@ -461,7 +464,7 @@ def NetworkFlow(Para,Info,Result_Planning,s):
     for i in range(Para.N_bus):
         for j in range(Para.N_bus):
             for k in range(Para.N_bus):
-                model.addConstr(Father[i,k] - Father[j,k] >= -2*(1-Father[i,j]))
+                model.addConstr(Father[i,k] - Father[j,k] - Father[i,j] >= -1)
     
     # 3.Network flow
     for n in range(Para.N_bus):
@@ -479,19 +482,18 @@ def NetworkFlow(Para,Info,Result_Planning,s):
             expr_line = LinExpr()
             expr_line = expr_line + quicksum(y_pos[i] * Para.Line_S[i] for i in line_tail)
             expr_line = expr_line + quicksum(y_neg[i] * Para.Line_S[i] for i in line_head)
-            model.addConstr(expr_line >= expr_load)
+            model.addConstr(expr_line - expr_load >= 0)
         else:
-            expr_sub = LinExpr(Para.Sub_S[Info.Sub[n][0]])
-            model.addConstr(expr_sub >= expr_load)
+            model.addConstr(Para.Sub_S[Info.Sub[n][0]] - expr_load >= 0)
     
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
         res = 1
-        '''
         res_y_pos = [y_pos[i].x for i in range(Para.N_line)]
         res_y_neg = [y_neg[i].x for i in range(Para.N_line)]
         res_f = [[Father[i,j].x for j in range(Para.N_bus)] for i in range(Para.N_bus)]
+        '''
         load = []
         supp = []
         for n in range(Para.N_bus):
@@ -521,12 +523,136 @@ def NetworkFlow(Para,Info,Result_Planning,s):
             res = 0
         else:
             res = -1
-    constrs = model.getConstrs()
-    print(model.getCoeff(constrs[0], y_neg[0]))
     return res
 
 
-    
+# This program solves 0-1 programming based on a classical Branch-and-Bound algorithm
+# Dual information from the relaxed linear programming at each leaf node is returned
+# 
+def BranchBound(Para,Info,Result_Planning,s,lb,ub,br = 0):
+    # 
+    # The model has the following format:
+    # 
+    # minimize
+    #       c * x + d
+    # subject to 
+    #       A * x >= rhs   (u)
+    #           x >= lb    (v)
+    #           x <= ub    (v)
+    # where x is binary varibale, u and v are dual variables
+    #
+    # Global variables
+    global var, obj  # optimization
+    global dual, flag, j0, j1, fit  # node of search tree
+    if br == 0:  # initialization
+        var  = np.zeros(1)  # all zero
+        obj  = float("inf")  # python infinity
+        dual = []  # dual variables 
+        flag = []  # optimality flag
+        fit  = []  # fitness
+        j0   = []  # index of x where branching has set xj to 0
+        j1   = []  # index of x where branching has set xj to 1
+    # Solve the relaxed linear programming
+    [lp_var,lp_obj,lp_flg,lp_dul] = NetworkFlow(Para,Info,Result_Planning,s)
+    # Update global variabes for the current node in the search tree
+    dual.append(lp_dul)
+    flag.append(lp_flg)
+    fit. append(lp_obj)
+    j0.  append(np.where(lb + ub == 0))  # lb == 0 and ub == 0
+    j1.  append(np.where(lb + ub == 2))  # lb == 1 and ub == 1
+    # Branching
+    if lp_flg != 1:  # if problem is infeasible
+        var_out = lp_var
+        obj_out = lp_obj
+        flg_out = -1
+    else:  # if problem is feasible
+        if lp_obj > obj:  # can't find any solution better than the current one
+            var_out = lp_var
+            obj_out = lp_obj
+            flg_out = -2
+        else:  # find a solution better than the current one
+            lp_var = np.array(lp_var)  # list to array
+            lp_gap = np.abs(lp_var - np.rint(lp_var))  # gap
+            if max(lp_gap) == 0:  # integer solution
+                var = lp_var  # update global variable
+                obj = lp_obj
+                var_out = var  # update output
+                obj_out = obj
+                flg_out = 1
+            else:  # real solution
+                leaf = np.where(lp_gap > 0)  # index of leaf node for branching
+                pick = int(round(leaf[0][0]))  # pick up the first index
+                lb_temp = lb  # temporary lower bound
+                ub_temp = ub  # temporary upper bound
+                # The upper branch calculation
+                if ub[pick] >= np.floor(lp_var[pick]) + 1:
+                    lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
+                    BranchBound(c,d,A,rhs,lb_temp,ub,1)
+                # The lower branch calculation
+                if lb[pick] <= np.floor(lp_var[pick]):
+                    ub_temp[pick] = np.floor(lp_var[pick])  # branching
+                    BranchBound(c,d,A,rhs,lb,ub_temp,1)
+                # update output
+                var_out = var
+                obj_out = obj
+                flg_out = 1
+    result = ResultBranchBound(var_out,obj_out,flg_out,dual,flag,j0,j1,fit)
+    # Return results
+    return result
+
+
+# This program solves a simple linear programming by Gurobi 8.1.0
+# 
+def Linprog(c,d,A,rhs,lb,ub):
+    # 
+    # minimize
+    #       c * x + d
+    # subject to 
+    #       A * x >= rhs   (u)
+    #           x >= lb    (v)
+    #           x <= ub    (v)
+    # where u and v are dual variables
+    #
+    model = Model()
+    # Create variables
+    n_var = np.size(A,1) # number of x
+    x = model.addVars(n_var)
+    # Set objective
+    obj = quicksum(c[i] * x[i] for i in range(n_var)) + d
+    model.setObjective(obj, GRB.MINIMIZE)
+    # Add constraints
+    for i in range(np.size(A,0)):
+        model.addConstr(quicksum(A[i,j] * x[j] for j in range(n_var)) >= rhs[i])
+    for i in range(n_var):
+        model.addConstr(x[i] >= lb[i])
+        model.addConstr(x[i] <= ub[i])
+    # Solve
+    model.Params.OutputFlag = 0  # turn off the display
+    model.optimize()
+    # Return
+    if model.status == GRB.Status.OPTIMAL:
+        # Return optimal solution
+        lp_var = [x[i].x for i in range(n_var)] # solution
+        lp_obj = obj.getValue() # objective
+        lp_flg = 1 # feasible
+        # Return dual variables
+        constrs = model.getConstrs() # get constraints
+        lp_dul  = [constrs[i].pi for i in range(np.size(A,0))] # dual variable
+    else:
+        # Return feasibility solution
+        n_eye = np.size(A,0) # number of new-added variables (eye matrix)
+        c  = np.append(np.zeros(n_var), np.ones(n_eye), axis = 0)
+        A  = np.append(A,  np.eye(n_eye), axis = 1)
+        lb = np.append(lb, np.zeros(n_eye))
+        ub = np.append(ub, np.ones(n_eye) * float("inf"))
+        [lp_var,lp_obj,_,lp_dul] = Linprog(c,d,A,rhs,lb,ub)
+        lp_flg = -1
+    # List to array
+    lp_var = np.array(lp_var)
+    lp_obj = np.array(lp_obj)
+    lp_flg = np.array(lp_flg)
+    lp_dul = np.array(lp_dul)
+    return [lp_var,lp_obj,lp_flg,lp_dul]
 
 
 # This function creates the reconfiguration sub-problem (MILP). After the problem is solved,
@@ -1019,135 +1145,6 @@ def ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s):
     return result
 
 
-# This program solves 0-1 programming based on a classical Branch-and-Bound algorithm
-# Dual information from the relaxed linear programming at each leaf node is returned
-# 
-def BranchBound(c,d,A,rhs,lb,ub,br = 0):
-    # 
-    # The model has the following format:
-    # 
-    # minimize
-    #       c * x + d
-    # subject to 
-    #       A * x >= rhs   (u)
-    #           x >= lb    (v)
-    #           x <= ub    (v)
-    # where x is binary varibale, u and v are dual variables
-    #
-    # Global variables
-    global var, obj  # optimization
-    global dual, flag, j0, j1, fit  # node of search tree
-    if br == 0:  # initialization
-        var  = np.zeros(len(c))  # all zero
-        obj  = float("inf")  # python infinity
-        dual = []  # dual variables 
-        flag = []  # optimality flag
-        fit  = []  # fitness
-        j0   = []  # index of x where branching has set xj to 0
-        j1   = []  # index of x where branching has set xj to 1
-    # Solve the relaxed linear programming
-    [lp_var,lp_obj,lp_flg,lp_dul] = Linprog(c,d,A,rhs,lb,ub)
-    # Update global variabes for the current node in the search tree
-    dual.append(lp_dul)
-    flag.append(lp_flg)
-    fit. append(lp_obj)
-    j0.  append(np.where(lb + ub == 0))  # lb == 0 and ub == 0
-    j1.  append(np.where(lb + ub == 2))  # lb == 1 and ub == 1
-    # Branching
-    if lp_flg != 1:  # if problem is infeasible
-        var_out = lp_var
-        obj_out = lp_obj
-        flg_out = -1
-    else:  # if problem is feasible
-        if lp_obj > obj:  # can't find any solution better than the current one
-            var_out = lp_var
-            obj_out = lp_obj
-            flg_out = -2
-        else:  # find a solution better than the current one
-            lp_var = np.array(lp_var)  # list to array
-            lp_gap = np.abs(lp_var - np.rint(lp_var))  # gap
-            if max(lp_gap) == 0:  # integer solution
-                var = lp_var  # update global variable
-                obj = lp_obj
-                var_out = var  # update output
-                obj_out = obj
-                flg_out = 1
-            else:  # real solution
-                leaf = np.where(lp_gap > 0)  # index of leaf node for branching
-                pick = int(round(leaf[0][0]))  # pick up the first index
-                lb_temp = lb  # temporary lower bound
-                ub_temp = ub  # temporary upper bound
-                # The upper branch calculation
-                if ub[pick] >= np.floor(lp_var[pick]) + 1:
-                    lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
-                    BranchBound(c,d,A,rhs,lb_temp,ub,1)
-                # The lower branch calculation
-                if lb[pick] <= np.floor(lp_var[pick]):
-                    ub_temp[pick] = np.floor(lp_var[pick])  # branching
-                    BranchBound(c,d,A,rhs,lb,ub_temp,1)
-                # update output
-                var_out = var
-                obj_out = obj
-                flg_out = 1
-    result = ResultBranchBound(var_out,obj_out,flg_out,dual,flag,j0,j1,fit)
-    # Return results
-    return result
-
-
-# This program solves a simple linear programming by Gurobi 8.1.0
-# 
-def Linprog(c,d,A,rhs,lb,ub):
-    # 
-    # minimize
-    #       c * x + d
-    # subject to 
-    #       A * x >= rhs   (u)
-    #           x >= lb    (v)
-    #           x <= ub    (v)
-    # where u and v are dual variables
-    #
-    model = Model()
-    # Create variables
-    n_var = np.size(A,1) # number of x
-    x = model.addVars(n_var)
-    # Set objective
-    obj = quicksum(c[i] * x[i] for i in range(n_var)) + d
-    model.setObjective(obj, GRB.MINIMIZE)
-    # Add constraints
-    for i in range(np.size(A,0)):
-        model.addConstr(quicksum(A[i,j] * x[j] for j in range(n_var)) >= rhs[i])
-    for i in range(n_var):
-        model.addConstr(x[i] >= lb[i])
-        model.addConstr(x[i] <= ub[i])
-    # Solve
-    model.Params.OutputFlag = 0  # turn off the display
-    model.optimize()
-    # Return
-    if model.status == GRB.Status.OPTIMAL:
-        # Return optimal solution
-        lp_var = [x[i].x for i in range(n_var)] # solution
-        lp_obj = obj.getValue() # objective
-        lp_flg = 1 # feasible
-        # Return dual variables
-        constrs = model.getConstrs() # get constraints
-        lp_dul  = [constrs[i].pi for i in range(np.size(A,0))] # dual variable
-    else:
-        # Return feasibility solution
-        n_eye = np.size(A,0) # number of new-added variables (eye matrix)
-        c  = np.append(np.zeros(n_var), np.ones(n_eye), axis = 0)
-        A  = np.append(A,  np.eye(n_eye), axis = 1)
-        lb = np.append(lb, np.zeros(n_eye))
-        ub = np.append(ub, np.ones(n_eye) * float("inf"))
-        [lp_var,lp_obj,_,lp_dul] = Linprog(c,d,A,rhs,lb,ub)
-        lp_flg = -1
-    # List to array
-    lp_var = np.array(lp_var)
-    lp_obj = np.array(lp_obj)
-    lp_flg = np.array(lp_flg)
-    lp_dul = np.array(lp_dul)
-    return [lp_var,lp_obj,lp_flg,lp_dul]
-
-
 # This function plots the planning solution in all stages
 # The solution is given in three separated sub-plots
 #
@@ -1217,7 +1214,7 @@ if __name__ == "__main__":
         obj_opr = 0
         for s in range(Para.N_scenario):
             #
-            test = NetworkFlow(Para,Info,Result_Planning,s)
+            # test = NetworkFlow(Para,Info,Result_Planning,s)
             #
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
