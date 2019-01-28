@@ -230,6 +230,16 @@ class ResultBranchBound(object):
         self.d_fit = fit    # fitness
 
 
+class ResultNetworkFlow(object):
+    def __init__(self,model,flag):
+        variable = model.getVars()
+        constrs  = model.getConstrs()
+        # Return optimal solution
+        self.lp_var = [variable[i].x for i in range(len(variable))]  # solution
+        self.lp_obj = (model.getObjective()).getValue()  # objective
+        self.lp_flg = flag
+        self.lp_dul = [constrs[i].pi for i in range(len(constrs))] # dual variable
+
 # This function input data from Excel files. The filtname can be changed to other
 # power system for further study
 #
@@ -404,7 +414,7 @@ def Planning(Para,Info,Relax,Logic,n_iter):
 
 # This function creates a 0-1 programming for network flow problem.
 #
-def NetworkFlow(Para,Info,Result_Planning,s):
+def NetworkFlow(Para,Info,Result_Planning,s,lb,ub):
     # Typical data
     tp_load  = Para.Load * Para.Typical_load[s]  # load
     tp_wind  = Para.Wind [:,2] * Para.Typical_wind [s]  # wind
@@ -416,17 +426,124 @@ def NetworkFlow(Para,Info,Result_Planning,s):
             tp_wind_ex [n] =  tp_wind[Info.Wind [n][0]]
         if  Info.Solar[n] != []:
             tp_solar_ex[n] = tp_solar[Info.Solar[n][0]]
-    # Capacity data
-    # Cap_line = [Result_Planning.x_line[n] * Para.Line_S[n] for n in range(Para.N_line)]
-    # Cap_sub  = [Result_Planning.x_sub [n] * Para.Sub_S [n] for n in range(Para.N_sub )]
+
+    # Model
+    model = Model()
+    # Create variables
+    y_pos   = model.addVars(Para.N_line)  # positive line flow
+    y_neg   = model.addVars(Para.N_line)  # negative line flow
+    Father  = model.addVars(Para.N_bus, Para.N_bus)
+
+    # Set objective
+    obj = quicksum(Father[i,j] for i in range(Para.N_bus) for j in range(Para.N_bus))
+    model.setObjective(obj, GRB.MINIMIZE)
+
+    # Add constraints
+    N_con = []  # indexing constraints
+    # 0.Reconfiguration
+    for n in range(Para.N_line):
+        model.addConstr( -y_pos[n] - y_neg[n] >= -Result_Planning.x_line [n])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 0
+
+    # 1.Radial topology
+    for n in range(Para.N_bus):
+        line_head = Info.Line_head[n]
+        line_tail = Info.Line_tail[n]
+        expr = quicksum(y_pos[i] for i in line_tail) + quicksum(y_neg[i] for i in line_head)
+        if Para.Load[n] > 0:  # load bus
+            model.addConstr( expr >=  1)
+            model.addConstr(-expr >= -1)
+        else:  # none load bus
+            model.addConstr( expr >= 0)
+            model.addConstr(-expr >= 0)
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 1
+
+    # 2.Father node matrix
+    for n in range(Para.N_bus):
+        model.addConstr( Father[n,n] >= 0)
+        model.addConstr(-Father[n,n] >= 0)
+    for n in range(Para.N_line):
+        head = int(round(Para.Line[n,1]))
+        tail = int(round(Para.Line[n,2]))
+        model.addConstr(Father[head,tail] >= y_pos[n])
+        model.addConstr(Father[tail,head] >= y_neg[n])
+    for i in range(Para.N_bus):
+        for j in range(Para.N_bus):
+            for k in range(Para.N_bus):
+                model.addConstr(Father[i,k] - Father[j,k] - Father[i,j] >= -1)
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 2
+
+    # 3.Network flow
+    for n in range(Para.N_bus):
+        # Load
+        expr_load = LinExpr()
+        expr_load = expr_load + tp_load[n] - tp_wind_ex[n] - tp_solar_ex[n]
+        for i in range(Para.N_bus):
+            expr_load = expr_load + Father[n,i] * tp_load[i]
+            expr_load = expr_load - Father[n,i] * tp_wind_ex [i]
+            expr_load = expr_load - Father[n,i] * tp_solar_ex[i]
+        # Input
+        if Info.Sub[n] == []:
+            line_head = Info.Line_head[n]
+            line_tail = Info.Line_tail[n]
+            expr_line = LinExpr()
+            expr_line = expr_line + quicksum(y_pos[i] * Para.Line_S[i] for i in line_tail)
+            expr_line = expr_line + quicksum(y_neg[i] * Para.Line_S[i] for i in line_head)
+            model.addConstr(expr_line - expr_load >= 0)
+        else:
+            model.addConstr(-expr_load >= -Para.Sub_S[Info.Sub[n][0]])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 3
+
+    # 4.Lower amd upper bound
+    for n in range(Para.N_line):
+        model.addConstr(y_pos[n] >= lb[n])
+        model.addConstr(y_pos[n] <= ub[n])
+        model.addConstr(y_neg[n] >= lb[Para.N_line + n])
+        model.addConstr(y_neg[n] <= ub[Para.N_line + n])
+    for i in range(Para.N_bus):
+        for j in range(Para.N_bus):
+            model.addConstr(Father[i,j] >= lb[2 * Para.N_line + i * Para.N_bus + j])
+            model.addConstr(Father[i,j] <= ub[2 * Para.N_line + i * Para.N_bus + j])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 4
+
+    # Optimize
+    model.optimize()
+    if model.status == GRB.Status.OPTIMAL:
+        result = ResultNetworkFlow(model, 1)
+    else:
+        model.feasRelaxS(0, False, False, True)
+        model.optimize()
+        result = ResultNetworkFlow(model,-1)
+    return result
+
+
+# This function creates a 0-1 programming for network flow problem.
+#
+def NetworkFlow_int(Para,Info,Result_Planning,s):
+    # Typical data
+    tp_load  = Para.Load * Para.Typical_load[s]  # load
+    tp_wind  = Para.Wind [:,2] * Para.Typical_wind [s]  # wind
+    tp_solar = Para.Solar[:,2] * Para.Typical_solar[s]  # solar
+    tp_wind_ex  = np.zeros(Para.N_bus)
+    tp_solar_ex = np.zeros(Para.N_bus)
+    for n in range(Para.N_bus):
+        if  Info.Wind [n] != []:
+            tp_wind_ex [n] =  tp_wind[Info.Wind [n][0]]
+        if  Info.Solar[n] != []:
+            tp_solar_ex[n] = tp_solar[Info.Solar[n][0]]
 
     # Model
     model = Model()
     # Create reconfiguration variables
-    y_pos   = model.addVars(Para.N_line, lb = 0.0, ub = 1.0)  # positive line flow
-    y_neg   = model.addVars(Para.N_line, lb = 0.0, ub = 1.0)  # negative line flow
+    y_pos   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # positive line flow
+    y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
     # Create matrix
-    Father  = model.addVars(Para.N_bus, Para.N_bus, lb = 0.0, ub = 1.0)
+    Father  = model.addVars(Para.N_bus, Para.N_bus, vtype = GRB.BINARY)
 
     # Set objective
     obj = quicksum(Father[i,j] for i in range(Para.N_bus) for j in range(Para.N_bus))
@@ -493,6 +610,10 @@ def NetworkFlow(Para,Info,Result_Planning,s):
         res_y_pos = [y_pos[i].x for i in range(Para.N_line)]
         res_y_neg = [y_neg[i].x for i in range(Para.N_line)]
         res_f = [[Father[i,j].x for j in range(Para.N_bus)] for i in range(Para.N_bus)]
+        y_line = np.array(res_y_pos) + np.array(res_y_neg)
+        obj = (model.getObjective()).getValue()
+        var = model.getVars()
+        res_var = [var[i].x for i in range(len(var))]
         '''
         load = []
         supp = []
@@ -523,7 +644,21 @@ def NetworkFlow(Para,Info,Result_Planning,s):
             res = 0
         else:
             res = -1
-    return res
+    return res_var
+
+
+
+def LogicPlanning(Para,Info,Result_Planning,s):
+    N_var = Para.N_line * 2 + Para.N_bus ** 2
+    lb = np.zeros(N_var)
+    ub = np.ones (N_var)
+    # ub = np.array(test_0)
+    Result_BranchBound = BranchBound(Para,Info,Result_Planning,s,lb,ub)
+    y_pos = np.array(Result_BranchBound.var[0:Para.N_line])
+    y_neg = np.array(Result_BranchBound.var[Para.N_line:2*Para.N_line])
+    y_line = y_pos + y_neg
+    PlotReconfiguration(Para,y_line)
+    return Result_BranchBound
 
 
 # This program solves 0-1 programming based on a classical Branch-and-Bound algorithm
@@ -544,8 +679,9 @@ def BranchBound(Para,Info,Result_Planning,s,lb,ub,br = 0):
     # Global variables
     global var, obj  # optimization
     global dual, flag, j0, j1, fit  # node of search tree
+    N_var = Para.N_line * 2 + Para.N_bus ** 2
     if br == 0:  # initialization
-        var  = np.zeros(1)  # all zero
+        var  = np.zeros(N_var)  # all zero
         obj  = float("inf")  # python infinity
         dual = []  # dual variables 
         flag = []  # optimality flag
@@ -553,45 +689,45 @@ def BranchBound(Para,Info,Result_Planning,s,lb,ub,br = 0):
         j0   = []  # index of x where branching has set xj to 0
         j1   = []  # index of x where branching has set xj to 1
     # Solve the relaxed linear programming
-    [lp_var,lp_obj,lp_flg,lp_dul] = NetworkFlow(Para,Info,Result_Planning,s)
+    result_NF = NetworkFlow(Para,Info,Result_Planning,s,lb,ub)
     # Update global variabes for the current node in the search tree
-    dual.append(lp_dul)
-    flag.append(lp_flg)
-    fit. append(lp_obj)
+    dual.append(result_NF.lp_dul)
+    flag.append(result_NF.lp_flg)
+    fit. append(result_NF.lp_obj)
     j0.  append(np.where(lb + ub == 0))  # lb == 0 and ub == 0
     j1.  append(np.where(lb + ub == 2))  # lb == 1 and ub == 1
     # Branching
-    if lp_flg != 1:  # if problem is infeasible
-        var_out = lp_var
-        obj_out = lp_obj
+    if result_NF.lp_flg != 1:  # if problem is infeasible
+        var_out = result_NF.lp_var
+        obj_out = result_NF.lp_obj
         flg_out = -1
     else:  # if problem is feasible
-        if lp_obj > obj:  # can't find any solution better than the current one
-            var_out = lp_var
-            obj_out = lp_obj
+        if result_NF.lp_obj > obj:  # can't find any solution better than the current one
+            var_out = result_NF.lp_var
+            obj_out = result_NF.lp_obj
             flg_out = -2
         else:  # find a solution better than the current one
-            lp_var = np.array(lp_var)  # list to array
+            lp_var = np.array(result_NF.lp_var)  # list to array
             lp_gap = np.abs(lp_var - np.rint(lp_var))  # gap
             if max(lp_gap) == 0:  # integer solution
-                var = lp_var  # update global variable
-                obj = lp_obj
+                var = result_NF.lp_var  # update global variable
+                obj = result_NF.lp_obj
                 var_out = var  # update output
                 obj_out = obj
                 flg_out = 1
             else:  # real solution
                 leaf = np.where(lp_gap > 0)  # index of leaf node for branching
                 pick = int(round(leaf[0][0]))  # pick up the first index
-                lb_temp = lb  # temporary lower bound
-                ub_temp = ub  # temporary upper bound
+                lb_temp = np.copy(lb)  # temporary lower bound
+                ub_temp = np.copy(ub)  # temporary upper bound
                 # The upper branch calculation
                 if ub[pick] >= np.floor(lp_var[pick]) + 1:
                     lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
-                    BranchBound(c,d,A,rhs,lb_temp,ub,1)
+                    BranchBound(Para,Info,Result_Planning,s,lb_temp,ub,1)
                 # The lower branch calculation
                 if lb[pick] <= np.floor(lp_var[pick]):
                     ub_temp[pick] = np.floor(lp_var[pick])  # branching
-                    BranchBound(c,d,A,rhs,lb,ub_temp,1)
+                    BranchBound(Para,Info,Result_Planning,s,lb,ub_temp,1)
                 # update output
                 var_out = var
                 obj_out = obj
@@ -1211,10 +1347,14 @@ if __name__ == "__main__":
     upper_bound = []  #
     while True:
         Result_Planning = Planning(Para,Info,Relax,Logic,n_iter)
+        for n in range(10):
+            Result_Planning.x_line[n] = 1
         obj_opr = 0
         for s in range(Para.N_scenario):
             #
-            # test = NetworkFlow(Para,Info,Result_Planning,s)
+            test_0 = NetworkFlow_int(Para,Info,Result_Planning,s)
+            test_1 = LogicPlanning  (Para,Info,Result_Planning,s)
+            #test_2 = NetworkFlow_int(Para,Info,Result_Planning,s)
             #
             Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
             Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
@@ -1229,8 +1369,9 @@ if __name__ == "__main__":
             break
         else:
             n_iter = n_iter + 1
-
-    test = NetworkFlow(Para,Info,Result_Planning,1)
+    test_1 = LogicPlanning  (Para,Info,Result_Planning,s)
+    test_2 = NetworkFlow_int(Para,Info,Result_Planning,s)
+    # test = LogicPlanning(Para,Info,Result_Planning,s)
     
     PlotPlanning(Para,Result_Planning.x_line)
     plt.plot(lower_bound)
