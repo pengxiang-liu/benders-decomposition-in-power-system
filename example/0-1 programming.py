@@ -146,22 +146,17 @@ def Linprog(c,e,A,rhs,lb,ub):
     model.optimize()
     # Return
     if model.status == GRB.Status.OPTIMAL:
-        # Return optimal solution
-        lp_var = [x[i].x for i in range(n_var)] # solution
-        lp_obj = obj.getValue() # objective
-        lp_flg = 1 # feasible
-        # Return dual variables
-        constrs = model.getConstrs() # get constraints
-        lp_dul  = [constrs[i].pi for i in range(np.size(A,0))] # dual variable
+        lp_flg =  1  # feasible
     else:
-        # Return feasibility solution
-        n_eye = np.size(A,0) # number of new-added variables (eye matrix)
-        c  = np.append(np.zeros(n_var), np.ones(n_eye), axis = 0)
-        A  = np.append(A,  np.eye(n_eye), axis = 1)
-        lb = np.append(lb, np.zeros(n_eye))
-        ub = np.append(ub, np.ones(n_eye) * float("inf"))
-        [lp_var,lp_obj,_,lp_dul] = Linprog(c,e,A,rhs,lb,ub)
-        lp_flg = -1
+        model.feasRelaxS(0, False, False, True)
+        model.optimize()
+        lp_flg = -1  # infeasible
+    # Return optimal solution
+    lp_var = [x[i].x for i in range(n_var)] # solution
+    lp_obj = obj.getValue() # objective
+    # Return dual variables
+    constrs = model.getConstrs() # get constraints
+    lp_dul  = [constrs[i].pi for i in range(np.size(A,0))] # dual variable
     # List to array
     lp_var = np.array(lp_var)
     lp_obj = np.array(lp_obj)
