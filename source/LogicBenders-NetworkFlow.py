@@ -430,9 +430,9 @@ def NetworkFlow(Para,Info,Result_Planning,s,lb,ub):
     # Model
     model = Model()
     # Create variables
-    y_pos   = model.addVars(Para.N_line)  # positive line flow
-    y_neg   = model.addVars(Para.N_line)  # negative line flow
-    Father  = model.addVars(Para.N_bus, Para.N_bus)
+    y_pos   = model.addVars(Para.N_line, lb = -GRB.INFINITY)  # positive line flow
+    y_neg   = model.addVars(Para.N_line, lb = -GRB.INFINITY)  # negative line flow
+    Father  = model.addVars(Para.N_bus, Para.N_bus, lb = -GRB.INFINITY)
 
     # Set objective
     obj = quicksum(Father[i,j] for i in range(Para.N_bus) for j in range(Para.N_bus))
@@ -501,16 +501,23 @@ def NetworkFlow(Para,Info,Result_Planning,s,lb,ub):
     # 4.Lower amd upper bound
     for n in range(Para.N_line):
         model.addConstr(y_pos[n] >= lb[n])
-        model.addConstr(y_pos[n] <= ub[n])
+    for n in range(Para.N_line):
         model.addConstr(y_neg[n] >= lb[Para.N_line + n])
-        model.addConstr(y_neg[n] <= ub[Para.N_line + n])
     for i in range(Para.N_bus):
         for j in range(Para.N_bus):
             model.addConstr(Father[i,j] >= lb[2 * Para.N_line + i * Para.N_bus + j])
-            model.addConstr(Father[i,j] <= ub[2 * Para.N_line + i * Para.N_bus + j])
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 4
-
+    for n in range(Para.N_line):
+        model.addConstr(y_pos[n] <= ub[n])
+    for n in range(Para.N_line):
+        model.addConstr(y_neg[n] <= ub[Para.N_line + n])
+    for i in range(Para.N_bus):
+        for j in range(Para.N_bus):
+            model.addConstr(Father[i,j] <= ub[2 * Para.N_line + i * Para.N_bus + j])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))  # 5
+    '''
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
@@ -519,7 +526,9 @@ def NetworkFlow(Para,Info,Result_Planning,s,lb,ub):
         model.feasRelaxS(0, False, False, True)
         model.optimize()
         result = ResultNetworkFlow(model,-1)
-    return result
+    '''
+    model_netflow = model.copy()
+    return model_netflow,N_con
 
 
 # This function creates a 0-1 programming for network flow problem.
@@ -653,18 +662,15 @@ def LogicPlanning(Para,Info,Result_Planning,s):
     lb = np.zeros(N_var)
     ub = np.ones (N_var)
     # ub = np.array(test_0)
-    Result_BranchBound = BranchBound(Para,Info,Result_Planning,s,lb,ub)
-    y_pos = np.array(Result_BranchBound.var[0:Para.N_line])
-    y_neg = np.array(Result_BranchBound.var[Para.N_line:2*Para.N_line])
-    y_line = y_pos + y_neg
-    PlotReconfiguration(Para,y_line)
+    model,n_con = NetworkFlow(Para,Info,Result_Planning,s,lb,ub)
+    Result_BranchBound = BranchBound(Para,Info,Result_Planning,s,lb,ub,model,n_con)
     return Result_BranchBound
 
 
 # This program solves 0-1 programming based on a classical Branch-and-Bound algorithm
 # Dual information from the relaxed linear programming at each leaf node is returned
 # 
-def BranchBound(Para,Info,Result_Planning,s,lb,ub,br = 0):
+def BranchBound(Para,Info,Result_Planning,s,lb,ub,model,n_con,br = 0):
     # 
     # The model has the following format:
     # 
@@ -689,7 +695,33 @@ def BranchBound(Para,Info,Result_Planning,s,lb,ub,br = 0):
         j0   = []  # index of x where branching has set xj to 0
         j1   = []  # index of x where branching has set xj to 1
     # Solve the relaxed linear programming
-    result_NF = NetworkFlow(Para,Info,Result_Planning,s,lb,ub)
+    m = model.copy()
+    lb_branch = np.where(lb == 1)
+    ub_branch = np.where(ub == 0)
+    
+    constr = m.getConstrs()
+    for n in lb_branch[0]:
+        constr[n_con[-3] + n].rhs = 1
+    for n in ub_branch[0]:
+        constr[n_con[-2] + n].rhs = 0
+    '''
+    variable = m.getVars()
+    for n in lb_branch[0]:
+        m.addConstr(variable[n] >= lb[n])
+    for n in ub_branch[0]:
+        m.addConstr(variable[n] <= ub[n])
+    '''
+    m.update()
+    # Optimize
+    m.optimize()
+    if m.status == GRB.Status.OPTIMAL:
+        result_NF = ResultNetworkFlow(m, 1)
+    else:
+        m.feasRelaxS(0, False, False, True)
+        m.optimize()
+        result_NF = ResultNetworkFlow(m,-1)
+
+    # result_NF = NetworkFlow(Para,Info,Result_Planning,s,lb,ub)
     # Update global variabes for the current node in the search tree
     dual.append(result_NF.lp_dul)
     flag.append(result_NF.lp_flg)
@@ -723,11 +755,11 @@ def BranchBound(Para,Info,Result_Planning,s,lb,ub,br = 0):
                 # The upper branch calculation
                 if ub[pick] >= np.floor(lp_var[pick]) + 1:
                     lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
-                    BranchBound(Para,Info,Result_Planning,s,lb_temp,ub,1)
+                    BranchBound(Para,Info,Result_Planning,s,lb_temp,ub,model,n_con,1)
                 # The lower branch calculation
                 if lb[pick] <= np.floor(lp_var[pick]):
                     ub_temp[pick] = np.floor(lp_var[pick])  # branching
-                    BranchBound(Para,Info,Result_Planning,s,lb,ub_temp,1)
+                    BranchBound(Para,Info,Result_Planning,s,lb,ub_temp,model,n_con,1)
                 # update output
                 var_out = var
                 obj_out = obj
@@ -735,60 +767,6 @@ def BranchBound(Para,Info,Result_Planning,s,lb,ub,br = 0):
     result = ResultBranchBound(var_out,obj_out,flg_out,dual,flag,j0,j1,fit)
     # Return results
     return result
-
-
-# This program solves a simple linear programming by Gurobi 8.1.0
-# 
-def Linprog(c,d,A,rhs,lb,ub):
-    # 
-    # minimize
-    #       c * x + d
-    # subject to 
-    #       A * x >= rhs   (u)
-    #           x >= lb    (v)
-    #           x <= ub    (v)
-    # where u and v are dual variables
-    #
-    model = Model()
-    # Create variables
-    n_var = np.size(A,1) # number of x
-    x = model.addVars(n_var)
-    # Set objective
-    obj = quicksum(c[i] * x[i] for i in range(n_var)) + d
-    model.setObjective(obj, GRB.MINIMIZE)
-    # Add constraints
-    for i in range(np.size(A,0)):
-        model.addConstr(quicksum(A[i,j] * x[j] for j in range(n_var)) >= rhs[i])
-    for i in range(n_var):
-        model.addConstr(x[i] >= lb[i])
-        model.addConstr(x[i] <= ub[i])
-    # Solve
-    model.Params.OutputFlag = 0  # turn off the display
-    model.optimize()
-    # Return
-    if model.status == GRB.Status.OPTIMAL:
-        # Return optimal solution
-        lp_var = [x[i].x for i in range(n_var)] # solution
-        lp_obj = obj.getValue() # objective
-        lp_flg = 1 # feasible
-        # Return dual variables
-        constrs = model.getConstrs() # get constraints
-        lp_dul  = [constrs[i].pi for i in range(np.size(A,0))] # dual variable
-    else:
-        # Return feasibility solution
-        n_eye = np.size(A,0) # number of new-added variables (eye matrix)
-        c  = np.append(np.zeros(n_var), np.ones(n_eye), axis = 0)
-        A  = np.append(A,  np.eye(n_eye), axis = 1)
-        lb = np.append(lb, np.zeros(n_eye))
-        ub = np.append(ub, np.ones(n_eye) * float("inf"))
-        [lp_var,lp_obj,_,lp_dul] = Linprog(c,d,A,rhs,lb,ub)
-        lp_flg = -1
-    # List to array
-    lp_var = np.array(lp_var)
-    lp_obj = np.array(lp_obj)
-    lp_flg = np.array(lp_flg)
-    lp_dul = np.array(lp_dul)
-    return [lp_var,lp_obj,lp_flg,lp_dul]
 
 
 # This function creates the reconfiguration sub-problem (MILP). After the problem is solved,
@@ -1352,26 +1330,25 @@ if __name__ == "__main__":
         obj_opr = 0
         for s in range(Para.N_scenario):
             #
-            test_0 = NetworkFlow_int(Para,Info,Result_Planning,s)
-            test_1 = LogicPlanning  (Para,Info,Result_Planning,s)
-            #test_2 = NetworkFlow_int(Para,Info,Result_Planning,s)
-            #
-            Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
-            Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
-            Result_Relax = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
-            #
-            Relax.append(Result_Relax)
-            obj_opr = obj_opr + Result_Reconfig.obj
-        lower_bound.append(Result_Planning.obj)
-        upper_bound.append(Result_Planning.obj_con + obj_opr)
-        gap = (upper_bound[n_iter]-lower_bound[n_iter])/upper_bound[n_iter]
+            Result_Logic = LogicPlanning(Para,Info,Result_Planning,s)
+            Logic.append(Result_Logic)
+        if Logic[-1].flg == 1 and Logic[-2].flg == 1:
+            for s in range(Para.N_scenario):
+                Result_Reconfig = Reconfig(Para,Info,Result_Planning,s)
+                Result_Dual = ReconfigDual(Para,Info,Result_Planning,Result_Reconfig,s)
+                Result_Relax = ReconfigRelax(Para,Info,Result_Planning,Result_Reconfig,Result_Dual,s)
+                Relax.append(Result_Relax)
+                obj_opr = obj_opr + Result_Reconfig.obj
+            # 
+            lower_bound.append(Result_Planning.obj)
+            upper_bound.append(Result_Planning.obj_con + obj_opr)
+            gap = (upper_bound[n_iter]-lower_bound[n_iter])/upper_bound[n_iter]
+        else:
+            gap = 1
         if gap <= 1e-2 or n_iter > 50:
             break
         else:
             n_iter = n_iter + 1
-    test_1 = LogicPlanning  (Para,Info,Result_Planning,s)
-    test_2 = NetworkFlow_int(Para,Info,Result_Planning,s)
-    # test = LogicPlanning(Para,Info,Result_Planning,s)
     
     PlotPlanning(Para,Result_Planning.x_line)
     plt.plot(lower_bound)
