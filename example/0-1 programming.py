@@ -97,8 +97,8 @@ def BranchBound(c,e,A,rhs,lb,ub,br = 0):
             else:  # real solution
                 leaf = np.where(lp_gap > 0)  # index of leaf node for branching
                 pick = int(leaf[0][0])  # pick up the first index
-                lb_temp = lb  # temporary lower bound
-                ub_temp = ub  # temporary upper bound
+                lb_temp = np.copy(lb)  # temporary lower bound
+                ub_temp = np.copy(ub)  # temporary upper bound
                 # The upper branch calculation
                 if ub[pick] >= np.floor(lp_var[pick]) + 1:
                     lb_temp[pick] = np.floor(lp_var[pick]) + 1  # branching
