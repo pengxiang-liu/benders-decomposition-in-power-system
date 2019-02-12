@@ -218,16 +218,52 @@ class ResultRelax(object):
 # This class restores the results of reconfiguration sub-problem
 class ResultBranchBound(object):
     def __init__(self,var_out,obj_out,flg_out,dual,flag,j0,j1,fit):
+        N_var = 1046
+        N_y   = Para.N_line + Para.N_sub + Para.N_wind + Para.N_solar
+
+        # Matrix coeff
+        N_x_line  = 0
+        N_x_sub   = N_x_line  + Para.N_line
+        N_x_wind  = N_x_sub   + Para.N_sub
+        N_x_solar = N_x_wind  + Para.N_wind
+        N_x_var   = N_x_solar + Para.N_solar
+
+        N_y_pos   = 0
+        N_y_neg   = N_y_pos  + Para.N_line
+        N_y_sub   = N_y_neg  + Para.N_line
+        N_y_wind  = N_y_sub  + Para.N_sub
+        N_y_solar = N_y_wind + Para.N_wind
+
+        A = np.zeros((N_y,N_var))
+        for i in range(Para.N_line):
+            for j in range(Para.N_line):
+                A[i,N_y_pos + j] = -1
+                A[i,N_y_neg + j] = -1
+        for i in range(Para.N_sub):
+            for j in range(Para.N_sub):
+                A[N_x_sub + i,N_y_sub + j] = -1
+        for i in range(Para.N_wind):
+            for j in range(Para.N_wind):
+                A[N_x_wind + i,N_y_wind + j] = -1
+        for i in range(Para.N_solar):
+            for j in range(Para.N_solar):
+                A[N_x_solar + i,N_y_solar + j] = -1
+        a = np.zeros(N_x_var)
+        B = np.eye(N_x_var)
         # Final solution
         self.var = var_out  # variable
         self.obj = obj_out  # objective
         self.flg = flg_out  # optimality status
         # Dual information
-        self.d_var = dual   # dual variables
+        self.d_var = dual[0][0:N_x_var]   # dual variables
         self.d_flg = flag   # flag
         self.d_j0  = j0     # j0
         self.d_j1  = j1     # j1
         self.d_fit = fit    # fitness
+        #
+        self.A = A
+        self.B = B
+        self.a = a
 
 
 class ResultNetworkFlow(object):
@@ -696,10 +732,39 @@ def NetworkFlow_int(Para,Info,Result_Planning,s):
 
 def LogicPlanning(Para,Info,Result_Planning,s):
     N_var = 1046
+    N_y   = Para.N_line + Para.N_sub + Para.N_wind + Para.N_solar
     lb = np.zeros(N_var)
     ub = np.ones (N_var)
-    # Matrix coeff
 
+    # Matrix coeff
+    N_x_line  = 0
+    N_x_sub   = N_x_line  + Para.N_line
+    N_x_wind  = N_x_sub   + Para.N_sub
+    N_x_solar = N_x_wind  + Para.N_wind
+    N_x_var   = N_x_solar + Para.N_solar
+
+    N_y_pos   = 0
+    N_y_neg   = N_y_pos  + Para.N_line
+    N_y_sub   = N_y_neg  + Para.N_line
+    N_y_wind  = N_y_sub  + Para.N_sub
+    N_y_solar = N_y_wind + Para.N_wind
+
+    A = np.zeros((N_y,N_var))
+    for i in range(Para.N_line):
+        for j in range(Para.N_line):
+            A[i,N_y_pos + j] = -1
+            A[i,N_y_neg + j] = -1
+    for i in range(Para.N_sub):
+        for j in range(Para.N_sub):
+            A[Para.N_line + i,N_y_sub + j] = -1
+    for i in range(Para.N_wind):
+        for j in range(Para.N_wind):
+            A[Para.N_line + Para.N_sub + i,N_y_wind + j] = -1
+    for i in range(Para.N_solar):
+        for j in range(Para.N_solar):
+            A[Para.N_line + Para.N_sub + Para.N_wind + i,N_y_solar + j] = -1
+    a = np.zeros(N_x_var)
+    B = np.eye(N_x_var)
     #
     [model,n_con,flag] = NetworkFlow(Para,Info,Result_Planning,s,lb,ub)
     if flag == 1:
