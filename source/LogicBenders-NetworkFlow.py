@@ -663,7 +663,6 @@ def NetworkFlow_int(Para,Info,Result_Planning,s):
     y_neg   = model.addVars(Para.N_line, vtype = GRB.BINARY)  # negative line flow
     # Create matrix
     Father  = model.addVars(Para.N_bus, Para.N_bus, vtype = GRB.BINARY)
-    n_var = Para.N_line*2 +Para.N_bus**2
 
     # Set objective
     obj = quicksum(Father[i,j] for i in range(Para.N_bus) for j in range(Para.N_bus))
@@ -674,14 +673,6 @@ def NetworkFlow_int(Para,Info,Result_Planning,s):
     # 0.Reconfiguration
     for n in range(Para.N_line):
         model.addConstr( -y_pos[n] - y_neg[n] >= -Result_Planning.x_line [n])
-        #
-        A_temp = np.zeros(n_var)
-        A_temp[y_pos[n]._colno] = -1
-        A_temp[y_neg[n]._colno] = -1
-        if n == 0:
-            A = A_temp
-        else:
-            A = np.vstack((A, A_temp))
     
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))
@@ -697,15 +688,6 @@ def NetworkFlow_int(Para,Info,Result_Planning,s):
         else:  # none load bus
             model.addConstr( expr >= 0)
             model.addConstr(-expr >= 0)
-        #
-        A_temp = np.zeros((2,n_var))
-        for i in line_tail:
-            A_temp[0,y_pos[i]._colno] =  1
-            A_temp[1,y_pos[i]._colno] = -1
-        for i in line_head:
-            A_temp[0,y_neg[i]._colno] =  1
-            A_temp[1,y_neg[i]._colno] = -1
-        A = np.vstack((A, A_temp))
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))
 
@@ -714,35 +696,20 @@ def NetworkFlow_int(Para,Info,Result_Planning,s):
     for n in range(Para.N_bus):
         model.addConstr( Father[n,n] >= 0)
         model.addConstr(-Father[n,n] >= 0)
-        #
-        A_temp = np.zeros((2,n_var))
-        A_temp[0,Father[n,n]._colno] =  1
-        A_temp[1,Father[n,n]._colno] = -1
-        A = np.vstack((A, A_temp))
     
     for n in range(Para.N_line):
         head = int(round(Para.Line[n,1]))
         tail = int(round(Para.Line[n,2]))
         model.addConstr(Father[head,tail] - y_pos[n] >= 0)
         model.addConstr(Father[tail,head] - y_neg[n] >= 0)
-        #
-        A_temp = np.zeros((2,n_var))
-        A_temp[0,Father[head,tail]._colno] = 1
-        A_temp[0,y_pos[n]._colno] = -1
-        A_temp[1,Father[tail,head]._colno] = 1
-        A_temp[1,y_neg[n]._colno] = -1
-        A = np.vstack((A, A_temp))
     
-    for i in range(Para.N_bus):
-        for j in range(Para.N_bus):
-            for k in range(Para.N_bus):
-                model.addConstr(Father[i,k] - Father[j,k] - Father[i,j] >= -1)
-                #
-                A_temp = np.zeros(n_var)
-                A_temp[Father[i,k]._colno] =  1
-                A_temp[Father[j,k]._colno] = -1
-                A_temp[Father[i,j]._colno] = -1
-                A = np.vstack((A, A_temp))
+    for n in range(Para.N_line):
+        head = int(round(Para.Line[n,1]))
+        tail = int(round(Para.Line[n,2]))
+        for k in range(Para.N_bus):
+            model.addConstr(Father[head,k] - Father[tail,k] - Father[head,tail] >= -1)
+            model.addConstr(Father[tail,k] - Father[head,k] - Father[tail,head] >= -1)
+
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))
 
@@ -774,13 +741,16 @@ def NetworkFlow_int(Para,Info,Result_Planning,s):
     constr = model.getConstrs()
     var = model.getVars()
     A = []
-    a = []
     for i in range(len(constr)):
         A.append([])
-        a.append(constr[i].rhs)
         for j in range(len(var)):
-            A[i].append(model.getCoeff(constr[i], var))
-    
+            A[i].append(model.getCoeff(constr[i], var[j]))
+    A = np.array(A)
+    a = [constr[i].rhs for i in range(len(constr))]
+    a = np.array(a)
+    a[0:Para.N_line] = 0
+    B = np.eye(Para.N_line)
+    B = np.vstack((B,np.zeros((1770,33))))
 
     if model.status == GRB.Status.OPTIMAL:
         flag =  1
@@ -881,7 +851,22 @@ def BranchBound(Para,Info,Result_Planning,s,lb,ub,model,n_con,br = 0):
     # Solve the relaxed linear programming
     m = model.copy()
     variable = m.getVars()
-    for n in range(len(var)):
+
+    constr = model.getConstrs()
+    var = model.getVars()
+    A = []
+    for i in range(len(constr)):
+        A.append([])
+        for j in range(len(var)):
+            A[i].append(model.getCoeff(constr[i], var[j]))
+    A = np.array(A)
+    a = [constr[i].rhs for i in range(len(constr))]
+    a = np.array(a)
+    a[0:Para.N_line] = 0
+    B = np.eye(Para.N_line)
+    B = np.vstack((B,np.zeros((1770,33))))
+
+    for n in range(len(variable)):
         m.addConstr(variable[n] >= lb[n])
         m.addConstr(-variable[n] >= -ub[n])
     
