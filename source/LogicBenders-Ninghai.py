@@ -26,9 +26,9 @@ from gurobipy import *
 class Parameter(object):
     def __init__(self,Data):
         # System
-        self.N_stage = 3
-        self.N_year_of_stage = 5
-        self.N_day = 4  # number of typical day
+        self.N_stage = 3  # number of stage
+        self.N_year  = 5  # number of year in each stage
+        self.N_day   = 4  # number of typical day
         self.N_day_season = [90,91,92,92]  # number of days in each season
         self.N_scenario = 4  # number of reconfiguration in a day
         self.N_hour = int(24/self.N_scenario)  # number of hour
@@ -44,6 +44,7 @@ class Parameter(object):
         self.N_bus = len(self.Bus)
         self.N_bus_AC = len(self.Bus_AC)
         self.N_bus_DC = len(self.Bus_DC)
+        self.Load = self.Bus[:,4:7]
         self.Load_angle = 0.95  # phase angle of load
         self.Cost_cutload = 200  # cost of load shedding
         # Line
@@ -105,6 +106,21 @@ class BusInfo(object):
         self.Conv_tail = Conv_tail
 
 
+# This class restores the results of planning master problem
+class ResultPlanning(object):
+    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,
+                 f_line,f_conv,f_load,f_sub,f_gen):
+        self.x_line = GurobiValue(x_line,'integer')
+        self.x_conv = GurobiValue(x_conv,'integer')
+        self.x_sub  = GurobiValue(x_sub, 'integer')
+        self.x_gen  = GurobiValue(x_gen, 'integer')
+        self.f_line = GurobiValue(f_line,'integer')
+        self.f_conv = GurobiValue(f_conv,'integer')
+        self.f_load = GurobiValue(f_load,'integer')
+        self.f_sub  = GurobiValue(f_sub, 'integer')
+        self.f_gen  = GurobiValue(f_gen, 'integer')
+        
+
 # This function input data from Excel files. The filtname can be changed 
 # to other power system for further study
 #
@@ -139,8 +155,24 @@ def Matrix_slice(Matrix,Coordinate):
 
 # This function creates a depreciation calculator
 #
-def Depreciation(Life,Rate):
-    return Rate*((1+Rate)**Life)/((1+Rate)**Life-1)
+def Depreciation(life,rate):
+    recovery = rate*((1+rate)**life)/((1+rate)**life-1)
+    return recovery
+
+
+# This function get the value of gurobi variables
+def GurobiValue(var,string):
+    key = var.keys()
+    dim = key._tuplelist__tuplelen  # dimention
+    for i in range(len(key)):
+        if string == 'integer':
+            var[key[i]] = int(round(var[key[i]].x))
+        else:
+            var[key[i]] = var[key[i]].x
+    if dim == 1:
+        var_size = len(key)
+        np.zeros(var_size)
+    return var
 
 
 # This function plots the planning solution in all stages
@@ -149,25 +181,140 @@ def Depreciation(Life,Rate):
 def PlotPlanning(Para,x_line):
     x = Para.Bus[:,2]
     y = Para.Bus[:,3]
-    
-    for n in range(Para.N_bus):  # Bus
-        plt.text(x[n] + 3, y[n] + 3, '%s'%n)
-        if n in Para.Sub[:,1]:
-            plt.plot(x[n],y[n],'rs')
-        else:
-            plt.plot(x[n],y[n],'b.')
-    for n in range(Para.N_line):  # Lines
-        x1 = x[int(round(Para.Line[n,1]))]
-        y1 = y[int(round(Para.Line[n,1]))]
-        x2 = x[int(round(Para.Line[n,2]))]
-        y2 = y[int(round(Para.Line[n,2]))]
-        if x_line[n] == 1:
-            plt.plot([x1,x2],[y1,y2],'r-')
-        else:
-            plt.plot([x1,x2],[y1,y2],'b--')
+    for t in range(Para.N_stage):
+        plt.subplot(1, Para.N_stage, t + 1)
+        for n in range(Para.N_bus):  # Bus
+            plt.text(x[n] + 3, y[n] + 3, '%s'%n)
+            if n in Para.Sub[:,1]:
+                plt.plot(x[n],y[n],'rs')
+            else:
+                plt.plot(x[n],y[n],'b.')
+        for n in range(Para.N_line):  # Lines
+            x1 = x[int(round(Para.Line[n,1]))]
+            y1 = y[int(round(Para.Line[n,1]))]
+            x2 = x[int(round(Para.Line[n,2]))]
+            y2 = y[int(round(Para.Line[n,2]))]
+            if x_line[n,t] == 1:
+                plt.plot([x1,x2],[y1,y2],'r-')
+            else:
+                plt.plot([x1,x2],[y1,y2],'b--')
         plt.axis('equal')
     plt.show()
 
+
+def Planning(Para,Info):
+    #
+    # minimize
+    #       Investment costs of line, converter, substation and
+    #       renewables generation
+    # subject to
+    #       1) ...
+    #       2) ...
+    #
+    model = Model()
+
+    # Investment variables
+    x_line = model.addVars(Para.N_line, Para.N_stage, vtype = GRB.BINARY)
+    x_conv = model.addVars(Para.N_conv, Para.N_stage, vtype = GRB.BINARY)
+    x_sub  = model.addVars(Para.N_sub,  Para.N_stage, vtype = GRB.BINARY)
+    x_gen  = model.addVars(Para.N_gen,  Para.N_stage, vtype = GRB.BINARY)
+    # Reconfiguration variables
+    y_line = model.addVars(Para.N_line, Para.N_scenario, Para.N_stage, 
+                           vtype = GRB.BINARY)
+    # Fictitious power flow variables
+    f_line = model.addVars(Para.N_line, Para.N_scenario, Para.N_stage, lb = -1e2)
+    f_conv = model.addVars(Para.N_conv, Para.N_scenario, Para.N_stage, lb = -1e2)
+    f_load = model.addVars(Para.N_bus,  Para.N_scenario, Para.N_stage, lb = -1e2)
+    f_gen  = model.addVars(Para.N_gen,  Para.N_scenario, Para.N_stage, lb = -1e2)
+    f_sub  = model.addVars(Para.N_sub,  Para.N_scenario, Para.N_stage, lb = -1e2)
+
+    # Set objective
+    obj = LinExpr()
+    for t in range(Para.N_stage):
+        RR = 0  # Reconvery rate in 5 years
+        for y in range(Para.N_year):
+            RR = RR + (1 + Para.Int_rate) ** (-(t * Para.N_year + y + 1))
+        for n in range(Para.N_line):  # line
+            obj = obj + RR * x_line[n,t] * Para.Line[n][8] * Para.Dep_line
+        for n in range(Para.N_conv):  # converter
+            obj = obj + RR * x_conv[n,t] * Para.Conv[n][4] * Para.Dep_conv
+        for n in range(Para.N_sub):  # substation
+            obj = obj + RR * x_sub [n,t] * Para.Sub [n][4] * Para.Dep_sub
+        for n in range(Para.N_gen):  # renewables generation
+            obj = obj + RR * x_gen [n,t] * Para.Gen [n][3] * Para.Dep_gen
+    model.setObjective(obj, GRB.MINIMIZE)
+
+    # Constraint 1 (installation)
+    for t in range(Para.N_stage-1):
+        model.addConstrs(x_line[n,t] <= x_line[n,t+1] for n in range(Para.N_line))
+        model.addConstrs(x_conv[n,t] <= x_conv[n,t+1] for n in range(Para.N_conv))
+        model.addConstrs(x_sub [n,t] <= x_sub [n,t+1] for n in range(Para.N_sub ))
+        model.addConstrs(x_gen [n,t] <= x_gen [n,t+1] for n in range(Para.N_gen ))
+    
+    # Constraint 2 (reconfiguration)
+    for t in range(Para.N_stage):
+        for s in range(Para.N_scenario):
+            for n in range(Para.N_line):
+                if Para.Line[n,7] > 0:  # existing line
+                    model.addConstr(y_line[n,s,t] <= 1)
+                else:  # expandable line
+                    model.addConstr(y_line[n,s,t] <= x_line[n,t])
+    
+    # Constraint 3 (fictitious power flow initialization)
+    for t in range(Para.N_stage):
+        for s in range(Para.N_scenario):
+            for n in range(Para.N_line):
+                if Para.Line[n,7] > 0:  # existing line
+                    model.addConstr(f_line[n,s,t] >= -100)
+                    model.addConstr(f_line[n,s,t] <=  100)
+                else:  # expandable line
+                    model.addConstr(f_line[n,s,t] >= -100 * x_line[n,t])
+                    model.addConstr(f_line[n,s,t] <=  100 * x_line[n,t])
+            for n in range(Para.N_bus):
+                if Para.Load[n,t] > 0:  # load bus
+                    model.addConstr(f_load[n,s,t] == 1)
+                else:  # none load bus
+                    model.addConstr(f_load[n,s,t] == 0)
+            for n in range(Para.N_conv):
+                model.addConstr(f_conv[n,s,t] >= -100 * x_conv[n,t])
+                model.addConstr(f_conv[n,s,t] <=  100 * x_conv[n,t])
+            for n in range(Para.N_sub):
+                model.addConstr(f_sub [n,s,t] >=  0)
+                model.addConstr(f_sub [n,s,t] <=  100)
+            for n in range(Para.N_gen):
+                model.addConstr(f_gen [n,s,t] == x_gen[n,t])
+    
+    # Constraint 4 (connectivity)
+    for t in range(Para.N_stage):
+        for s in range(Para.N_scenario):
+            for i in range(Para.N_bus):
+                line_head = Info.Line_head[i]
+                line_tail = Info.Line_tail[i]
+                conv_head = Info.Conv_head[i]
+                conv_tail = Info.Conv_tail[i]
+                expr = LinExpr()
+                expr = expr + f_load[n,s,t]
+                expr = expr + quicksum(f_line[n,s,t] for n in line_head)
+                expr = expr - quicksum(f_line[n,s,t] for n in line_tail)
+                expr = expr + quicksum(f_conv[n,s,t] for n in conv_head)
+                expr = expr - quicksum(f_conv[n,s,t] for n in conv_tail)
+                if i in Para.Sub[:,1]:
+                    bus_temp = int(np.where(i == Para.Sub[:,1])[0])
+                    expr = expr - f_sub[bus_temp,s,t]
+                if i in Para.Gen[:,1]:
+                    bus_temp = int(np.where(i == Para.Gen[:,1])[0])
+                    expr = expr + f_gen[bus_temp,s,t]
+                model.addConstr(expr == 0)
+    
+    # Optimize
+    model.optimize()
+    if model.status == GRB.Status.OPTIMAL:
+        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,
+                                f_line,f_conv,f_load,f_sub,f_gen)
+    return result
+
+
+        
 
 if __name__ == "__main__":
 
