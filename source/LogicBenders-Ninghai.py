@@ -30,8 +30,8 @@ class Parameter(object):
         self.N_year  = 5  # number of year in each stage
         self.N_day   = 4  # number of typical day
         self.N_day_season = [90,91,92,92]  # number of days in each season
-        self.N_scenario = 4  # number of reconfiguration in a day
-        self.N_hour = int(24/self.N_scenario)  # number of hour
+        self.N_scene = 4  # number of reconfiguration in a day
+        self.N_hour = int(24/self.N_scene)  # number of hour
         self.Int_rate = 0.05  # interest rate
         self.Big_M = 500  # Big M
         self.Voltage = 35
@@ -170,9 +170,27 @@ def GurobiValue(var,string):
         else:
             var[key[i]] = var[key[i]].x
     if dim == 1:
-        var_size = len(key)
-        np.zeros(var_size)
-    return var
+        dim_1 = len(key.select('*'))
+        matrix_var = np.zeros(dim_1)
+        for i in range(dim_1):
+            matrix_var[i] = var[i]
+    if dim == 2:
+        dim_1 = len(key.select('*',0))
+        dim_2 = len(key.select(0,'*'))
+        matrix_var = np.zeros((dim_1,dim_2))
+        for i in range(dim_1):
+            for j in range(dim_2):
+                matrix_var[i,j] = var[i,j]
+    if dim == 3:
+        dim_1 = len(key.select('*',0,0))
+        dim_2 = len(key.select(0,'*',0))
+        dim_3 = len(key.select(0,0,'*'))
+        matrix_var = np.zeros((dim_1,dim_2,dim_3))
+        for i in range(dim_1):
+            for j in range(dim_2):
+                for k in range(dim_3):
+                    matrix_var[i,j,k] = var[i,j,k]
+    return matrix_var
 
 
 # This function plots the planning solution in all stages
@@ -219,14 +237,14 @@ def Planning(Para,Info):
     x_sub  = model.addVars(Para.N_sub,  Para.N_stage, vtype = GRB.BINARY)
     x_gen  = model.addVars(Para.N_gen,  Para.N_stage, vtype = GRB.BINARY)
     # Reconfiguration variables
-    y_line = model.addVars(Para.N_line, Para.N_scenario, Para.N_stage, 
+    y_line = model.addVars(Para.N_line, Para.N_scene, Para.N_stage, 
                            vtype = GRB.BINARY)
     # Fictitious power flow variables
-    f_line = model.addVars(Para.N_line, Para.N_scenario, Para.N_stage, lb = -1e2)
-    f_conv = model.addVars(Para.N_conv, Para.N_scenario, Para.N_stage, lb = -1e2)
-    f_load = model.addVars(Para.N_bus,  Para.N_scenario, Para.N_stage, lb = -1e2)
-    f_gen  = model.addVars(Para.N_gen,  Para.N_scenario, Para.N_stage, lb = -1e2)
-    f_sub  = model.addVars(Para.N_sub,  Para.N_scenario, Para.N_stage, lb = -1e2)
+    f_line = model.addVars(Para.N_line, Para.N_scene, Para.N_stage, lb = -1e2)
+    f_conv = model.addVars(Para.N_conv, Para.N_scene, Para.N_stage, lb = -1e2)
+    f_load = model.addVars(Para.N_bus,  Para.N_scene, Para.N_stage, lb = -1e2)
+    f_gen  = model.addVars(Para.N_gen,  Para.N_scene, Para.N_stage, lb = -1e2)
+    f_sub  = model.addVars(Para.N_sub,  Para.N_scene, Para.N_stage, lb = -1e2)
 
     # Set objective
     obj = LinExpr()
@@ -253,7 +271,7 @@ def Planning(Para,Info):
     
     # Constraint 2 (reconfiguration)
     for t in range(Para.N_stage):
-        for s in range(Para.N_scenario):
+        for s in range(Para.N_scene):
             for n in range(Para.N_line):
                 if Para.Line[n,7] > 0:  # existing line
                     model.addConstr(y_line[n,s,t] <= 1)
@@ -262,7 +280,7 @@ def Planning(Para,Info):
     
     # Constraint 3 (fictitious power flow initialization)
     for t in range(Para.N_stage):
-        for s in range(Para.N_scenario):
+        for s in range(Para.N_scene):
             for n in range(Para.N_line):
                 if Para.Line[n,7] > 0:  # existing line
                     model.addConstr(f_line[n,s,t] >= -100)
@@ -286,7 +304,7 @@ def Planning(Para,Info):
     
     # Constraint 4 (connectivity)
     for t in range(Para.N_stage):
-        for s in range(Para.N_scenario):
+        for s in range(Para.N_scene):
             for i in range(Para.N_bus):
                 line_head = Info.Line_head[i]
                 line_tail = Info.Line_tail[i]
