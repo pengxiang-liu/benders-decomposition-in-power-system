@@ -108,18 +108,73 @@ class BusInfo(object):
 
 # This class restores the results of planning master problem
 class ResultPlanning(object):
-    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,
+    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,y_line,
                  f_line,f_conv,f_load,f_sub,f_gen):
         self.x_line = GurobiValue(x_line,'integer')
         self.x_conv = GurobiValue(x_conv,'integer')
         self.x_sub  = GurobiValue(x_sub, 'integer')
         self.x_gen  = GurobiValue(x_gen, 'integer')
+        self.y_line = GurobiValue(y_line,'integer')
         self.f_line = GurobiValue(f_line,'integer')
         self.f_conv = GurobiValue(f_conv,'integer')
         self.f_load = GurobiValue(f_load,'integer')
         self.f_sub  = GurobiValue(f_sub, 'integer')
         self.f_gen  = GurobiValue(f_gen, 'integer')
         
+
+# This class restores the 'plot' function
+class PlotFun(object):
+    def __init__(self):
+        pass
+    def Planning_all(self,Para,Result):
+        x = Para.Bus[:,2]
+        y = Para.Bus[:,3]
+        for t in range(Para.N_stage):
+            plt.subplot(1, Para.N_stage, t + 1)
+            for n in range(Para.N_bus):  # Bus
+                plt.text(x[n] + 3, y[n] + 3, '%s'%n)
+                if n in Para.Sub[:,1]:
+                    plt.plot(x[n],y[n],'rs')
+                else:
+                    plt.plot(x[n],y[n],'b.')
+            for n in range(Para.N_line):  # Lines
+                x1 = x[int(round(Para.Line[n,1]))]
+                y1 = y[int(round(Para.Line[n,1]))]
+                x2 = x[int(round(Para.Line[n,2]))]
+                y2 = y[int(round(Para.Line[n,2]))]
+                if Result.x_line[n,t] == 1 or Para.Line[n,6] > 0:
+                    if Para.Line[n,9] == 0:
+                        plt.plot([x1,x2],[y1,y2],'r-')
+                    if Para.Line[n,9] == 1:
+                        plt.plot([x1,x2],[y1,y2],'b-')
+                else:
+                    plt.plot([x1,x2],[y1,y2],'b--')
+            plt.axis('equal')
+        plt.show()
+    def Planning_one(self,Para,Result,t):
+        x = Para.Bus[:,2]
+        y = Para.Bus[:,3]
+        for n in range(Para.N_bus):  # Bus
+            plt.text(x[n] + 3, y[n] + 3, '%s'%n)
+            if n in Para.Sub[:,1]:
+                plt.plot(x[n],y[n],'rs')
+            else:
+                plt.plot(x[n],y[n],'b.')
+        for n in range(Para.N_line):  # Lines
+            x1 = x[int(round(Para.Line[n,1]))]
+            y1 = y[int(round(Para.Line[n,1]))]
+            x2 = x[int(round(Para.Line[n,2]))]
+            y2 = y[int(round(Para.Line[n,2]))]
+            if Result.x_line[n,t] == 1 or Para.Line[n,6] > 0:
+                if Para.Line[n,9] == 0:
+                    plt.plot([x1,x2],[y1,y2],'r-')
+                if Para.Line[n,9] == 1:
+                    plt.plot([x1,x2],[y1,y2],'b-')
+            else:
+                plt.plot([x1,x2],[y1,y2],'b--')
+        plt.axis('equal')
+        plt.show()
+
 
 # This function input data from Excel files. The filtname can be changed 
 # to other power system for further study
@@ -212,7 +267,7 @@ def PlotPlanning(Para,x_line):
             y1 = y[int(round(Para.Line[n,1]))]
             x2 = x[int(round(Para.Line[n,2]))]
             y2 = y[int(round(Para.Line[n,2]))]
-            if x_line[n,t] == 1:
+            if x_line[n,t] == 1 or Para.Line[n,6] > 0:
                 plt.plot([x1,x2],[y1,y2],'r-')
             else:
                 plt.plot([x1,x2],[y1,y2],'b--')
@@ -273,7 +328,7 @@ def Planning(Para,Info):
     for t in range(Para.N_stage):
         for s in range(Para.N_scene):
             for n in range(Para.N_line):
-                if Para.Line[n,7] > 0:  # existing line
+                if Para.Line[n,6] > 0:  # existing line
                     model.addConstr(y_line[n,s,t] <= 1)
                 else:  # expandable line
                     model.addConstr(y_line[n,s,t] <= x_line[n,t])
@@ -281,18 +336,14 @@ def Planning(Para,Info):
     # Constraint 3 (fictitious power flow initialization)
     for t in range(Para.N_stage):
         for s in range(Para.N_scene):
-            for n in range(Para.N_line):
-                if Para.Line[n,7] > 0:  # existing line
-                    model.addConstr(f_line[n,s,t] >= -100)
-                    model.addConstr(f_line[n,s,t] <=  100)
-                else:  # expandable line
-                    model.addConstr(f_line[n,s,t] >= -100 * x_line[n,t])
-                    model.addConstr(f_line[n,s,t] <=  100 * x_line[n,t])
             for n in range(Para.N_bus):
                 if Para.Load[n,t] > 0:  # load bus
                     model.addConstr(f_load[n,s,t] == 1)
                 else:  # none load bus
                     model.addConstr(f_load[n,s,t] == 0)
+            for n in range(Para.N_line):
+                model.addConstr(f_line[n,s,t] >= -100 * y_line[n,s,t])
+                model.addConstr(f_line[n,s,t] <=  100 * y_line[n,s,t])
             for n in range(Para.N_conv):
                 model.addConstr(f_conv[n,s,t] >= -100 * x_conv[n,t])
                 model.addConstr(f_conv[n,s,t] <=  100 * x_conv[n,t])
@@ -300,7 +351,7 @@ def Planning(Para,Info):
                 model.addConstr(f_sub [n,s,t] >=  0)
                 model.addConstr(f_sub [n,s,t] <=  100)
             for n in range(Para.N_gen):
-                model.addConstr(f_gen [n,s,t] == x_gen[n,t])
+                model.addConstr(f_gen [n,s,t] ==  x_gen[n,t])
     
     # Constraint 4 (connectivity)
     for t in range(Para.N_stage):
@@ -327,7 +378,7 @@ def Planning(Para,Info):
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,
+        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,y_line,
                                 f_line,f_conv,f_load,f_sub,f_gen)
     return result
 
@@ -346,6 +397,9 @@ if __name__ == "__main__":
 
     # Benders decomposition
     Result_Planning = Planning(Para,Info)
+
+    Plot = PlotFun()
+    Plot.Planning_one(Para,Result_Planning,1)
 
     n = 1
     
