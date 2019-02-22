@@ -26,12 +26,11 @@ from gurobipy import *
 class Parameter(object):
     def __init__(self,Data):
         # System
-        self.N_stage = 3  # number of stage
-        self.N_year  = 5  # number of year in each stage
-        self.N_day   = 4  # number of typical day
-        self.N_day_season = [90,91,92,92]  # number of days in each season
-        self.N_scene = 4  # number of reconfiguration in a day
-        self.N_hour = int(24/self.N_scene)  # number of hour
+        self.N_stage = 3   # number of stage
+        self.N_year  = 5   # number of year in each stage
+        self.N_scene = 16  # number of reconfiguration scenario
+        self.N_hour  = 6   # number of hour in each scenario
+        self.N_time  = 360/self.N_scene  # number of times
         self.Int_rate = 0.05  # interest rate
         self.Big_M = 500  # Big M
         self.Voltage = 35
@@ -108,70 +107,59 @@ class BusInfo(object):
 
 # This class restores the results of planning master problem
 class ResultPlanning(object):
-    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,y_line,
-                 f_line,f_conv,f_load,f_sub,f_gen):
+    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,y_line):
         self.x_line = GurobiValue(x_line,'integer')
         self.x_conv = GurobiValue(x_conv,'integer')
         self.x_sub  = GurobiValue(x_sub, 'integer')
         self.x_gen  = GurobiValue(x_gen, 'integer')
         self.y_line = GurobiValue(y_line,'integer')
-        self.f_line = GurobiValue(f_line,'integer')
-        self.f_conv = GurobiValue(f_conv,'integer')
-        self.f_load = GurobiValue(f_load,'integer')
-        self.f_sub  = GurobiValue(f_sub, 'integer')
-        self.f_gen  = GurobiValue(f_gen, 'integer')
         
 
 # This class restores the 'plot' function
-class PlotFun(object):
-    def __init__(self):
+class PlotFunc(object):
+    def __init__(self,Para):
         pass
-    def Planning_all(self,Para,Result):
+    def Planning(self,Para,Res,t):
+        x_line = Res.x_line[:,t]
+        x_conv = Res.x_conv[:,t]
+        for n in range(Para.N_line):
+            if Para.Line[n,6] > 0:
+                x_line[n] = 1
+        self.Plot_Figure(Para,x_line,x_conv)
+    def Reconfig(self,Para,Res,s,t):
+        y_line = Res.y_line[:,s,t]
+        x_conv = Res.x_conv[:,t]
+        self.Plot_Figure(Para,y_line,x_conv)
+    def Plot_Figure(self,Para,Line,Conv):
         x = Para.Bus[:,2]
         y = Para.Bus[:,3]
-        for t in range(Para.N_stage):
-            plt.subplot(1, Para.N_stage, t + 1)
-            for n in range(Para.N_bus):  # Bus
-                plt.text(x[n] + 3, y[n] + 3, '%s'%n)
-                if n in Para.Sub[:,1]:
-                    plt.plot(x[n],y[n],'rs')
-                else:
-                    plt.plot(x[n],y[n],'b.')
-            for n in range(Para.N_line):  # Lines
-                x1 = x[int(round(Para.Line[n,1]))]
-                y1 = y[int(round(Para.Line[n,1]))]
-                x2 = x[int(round(Para.Line[n,2]))]
-                y2 = y[int(round(Para.Line[n,2]))]
-                if Result.x_line[n,t] == 1 or Para.Line[n,6] > 0:
-                    if Para.Line[n,9] == 0:
-                        plt.plot([x1,x2],[y1,y2],'r-')
-                    if Para.Line[n,9] == 1:
-                        plt.plot([x1,x2],[y1,y2],'b-')
-                else:
-                    plt.plot([x1,x2],[y1,y2],'b--')
-            plt.axis('equal')
-        plt.show()
-    def Planning_one(self,Para,Result,t):
-        x = Para.Bus[:,2]
-        y = Para.Bus[:,3]
+        for n in range(Para.N_bus):  # Bus
+            if Para.Bus[n,7] == 1:
+                y[n] = y[n] - 150
         for n in range(Para.N_bus):  # Bus
             plt.text(x[n] + 3, y[n] + 3, '%s'%n)
             if n in Para.Sub[:,1]:
                 plt.plot(x[n],y[n],'rs')
             else:
                 plt.plot(x[n],y[n],'b.')
-        for n in range(Para.N_line):  # Lines
+        for n in range(Para.N_line):  # lines
             x1 = x[int(round(Para.Line[n,1]))]
             y1 = y[int(round(Para.Line[n,1]))]
             x2 = x[int(round(Para.Line[n,2]))]
             y2 = y[int(round(Para.Line[n,2]))]
-            if Result.x_line[n,t] == 1 or Para.Line[n,6] > 0:
+            if Line[n] == 1:
                 if Para.Line[n,9] == 0:
                     plt.plot([x1,x2],[y1,y2],'r-')
                 if Para.Line[n,9] == 1:
                     plt.plot([x1,x2],[y1,y2],'b-')
             else:
                 plt.plot([x1,x2],[y1,y2],'b--')
+        for n in range(Para.N_conv):  # converters
+            if Conv[n] == 1:
+                head = int(round(Para.Conv[n,1]))
+                tail = int(round(Para.Conv[n,2]))
+                plt.plot(x[head],y[head],'bs')
+                plt.plot(x[tail],y[tail],'bs')
         plt.axis('equal')
         plt.show()
 
@@ -218,24 +206,25 @@ def Depreciation(life,rate):
 # This function get the value of gurobi variables
 def GurobiValue(var,string):
     key = var.keys()
+    cpy = var.copy()
     dim = key._tuplelist__tuplelen  # dimention
     for i in range(len(key)):
         if string == 'integer':
-            var[key[i]] = int(round(var[key[i]].x))
+            cpy[key[i]] = int(round(var[key[i]].x))
         else:
-            var[key[i]] = var[key[i]].x
+            cpy[key[i]] = var[key[i]].x
     if dim == 1:
         dim_1 = len(key.select('*'))
         matrix_var = np.zeros(dim_1)
         for i in range(dim_1):
-            matrix_var[i] = var[i]
+            matrix_var[i] = cpy[i]
     if dim == 2:
         dim_1 = len(key.select('*',0))
         dim_2 = len(key.select(0,'*'))
         matrix_var = np.zeros((dim_1,dim_2))
         for i in range(dim_1):
             for j in range(dim_2):
-                matrix_var[i,j] = var[i,j]
+                matrix_var[i,j] = cpy[i,j]
     if dim == 3:
         dim_1 = len(key.select('*',0,0))
         dim_2 = len(key.select(0,'*',0))
@@ -244,35 +233,8 @@ def GurobiValue(var,string):
         for i in range(dim_1):
             for j in range(dim_2):
                 for k in range(dim_3):
-                    matrix_var[i,j,k] = var[i,j,k]
+                    matrix_var[i,j,k] = cpy[i,j,k]
     return matrix_var
-
-
-# This function plots the planning solution in all stages
-# The solution is given in three separated sub-plots
-#
-def PlotPlanning(Para,x_line):
-    x = Para.Bus[:,2]
-    y = Para.Bus[:,3]
-    for t in range(Para.N_stage):
-        plt.subplot(1, Para.N_stage, t + 1)
-        for n in range(Para.N_bus):  # Bus
-            plt.text(x[n] + 3, y[n] + 3, '%s'%n)
-            if n in Para.Sub[:,1]:
-                plt.plot(x[n],y[n],'rs')
-            else:
-                plt.plot(x[n],y[n],'b.')
-        for n in range(Para.N_line):  # Lines
-            x1 = x[int(round(Para.Line[n,1]))]
-            y1 = y[int(round(Para.Line[n,1]))]
-            x2 = x[int(round(Para.Line[n,2]))]
-            y2 = y[int(round(Para.Line[n,2]))]
-            if x_line[n,t] == 1 or Para.Line[n,6] > 0:
-                plt.plot([x1,x2],[y1,y2],'r-')
-            else:
-                plt.plot([x1,x2],[y1,y2],'b--')
-        plt.axis('equal')
-    plt.show()
 
 
 def Planning(Para,Info):
@@ -292,8 +254,9 @@ def Planning(Para,Info):
     x_sub  = model.addVars(Para.N_sub,  Para.N_stage, vtype = GRB.BINARY)
     x_gen  = model.addVars(Para.N_gen,  Para.N_stage, vtype = GRB.BINARY)
     # Reconfiguration variables
-    y_line = model.addVars(Para.N_line, Para.N_scene, Para.N_stage, 
-                           vtype = GRB.BINARY)
+    y_line = model.addVars(Para.N_line, Para.N_scene, Para.N_stage, vtype = GRB.BINARY)
+    y_pos  = model.addVars(Para.N_line, Para.N_scene, Para.N_stage, vtype = GRB.BINARY)
+    y_neg  = model.addVars(Para.N_line, Para.N_scene, Para.N_stage, vtype = GRB.BINARY)
     # Fictitious power flow variables
     f_line = model.addVars(Para.N_line, Para.N_scene, Para.N_stage, lb = -1e2)
     f_conv = model.addVars(Para.N_conv, Para.N_scene, Para.N_stage, lb = -1e2)
@@ -362,7 +325,7 @@ def Planning(Para,Info):
                 conv_head = Info.Conv_head[i]
                 conv_tail = Info.Conv_tail[i]
                 expr = LinExpr()
-                expr = expr + f_load[n,s,t]
+                expr = expr + f_load[i,s,t]
                 expr = expr + quicksum(f_line[n,s,t] for n in line_head)
                 expr = expr - quicksum(f_line[n,s,t] for n in line_tail)
                 expr = expr + quicksum(f_conv[n,s,t] for n in conv_head)
@@ -375,15 +338,51 @@ def Planning(Para,Info):
                     expr = expr + f_gen[bus_temp,s,t]
                 model.addConstr(expr == 0)
     
+    # Constraint 5 (cradial topology)
+    for t in range(Para.N_stage):
+        for s in range(Para.N_scene):
+            for i in range(Para.N_bus_AC):
+                line_head = Info.Line_head[i]
+                line_tail = Info.Line_tail[i]
+                expr = LinExpr()
+                expr = expr + quicksum(y_pos[n,s,t] for n in line_tail)
+                expr = expr + quicksum(y_neg[n,s,t] for n in line_head)
+                if Para.Load[i,t] > 0:  # load bus
+                    model.addConstr(expr == 1)
+                else:  # none load bus
+                    model.addConstr(expr == 0)
+            for n in range(Para.N_line):
+                model.addConstr(y_pos[n,s,t] + y_neg[n,s,t] == y_line[n,s,t])
+    
+    # Constraint 6 (renewable generation)
+    for t in range(Para.N_stage):
+        for n in range(Para.N_gen):
+            if t >= Para.Gen[n,5]:
+                model.addConstr(x_gen[n,t] == 1)
+            else:
+                model.addConstr(x_gen[n,t] == 0)
+
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,y_line,
-                                f_line,f_conv,f_load,f_sub,f_gen)
+        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,y_line)
     return result
+   
 
+# This function creates the reconfiguration worker problem. Dual variables 
+# are returned for generating Benders cut. The problem is formulated under
+# a given scenario 's' at stage 't'.
+#
+def Reconfig(Para,Info,Result_Planning,s,t):
+    #
+    '''
+    y_line = Result_Planning.y_line[:,s,t]
+    x_conv = Result_Planning.x_conv[:,t]
+    x_sub  = Result_Planning.x_sub [:,t]
+    x_gen  = Result_Planning.x_gen [:,t]
+    '''
+    pass
 
-        
 
 if __name__ == "__main__":
 
@@ -397,9 +396,14 @@ if __name__ == "__main__":
 
     # Benders decomposition
     Result_Planning = Planning(Para,Info)
+    Result_Reconfig = Reconfig(Para,Info,Result_Planning,s,t)
 
-    Plot = PlotFun()
-    Plot.Planning_one(Para,Result_Planning,1)
+    '''
+    # Figure
+    Plot = PlotFunc(Para)
+    Plot.Planning(Para,Result_Planning,0)
+    Plot.Reconfig(Para,Result_Planning,0,0)
+    '''
 
     n = 1
     
