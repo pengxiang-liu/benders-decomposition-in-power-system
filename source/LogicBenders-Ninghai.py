@@ -507,13 +507,11 @@ def Reconfig(Para,Info,Result_Planning,s,t):
                 else:
                     expr = expr + Var[N_S_gen + bus_no, h] * Para.Factor[1]
             # Add constraint
-            '''
             if Para.Bus[n,7] == 0:  # AC bus
                 model.addConstr(expr == Data_load[n,h] * Para.Factor[1])
-            
             if Para.Bus[n,7] == 1:  # DC bus
                 model.addConstr(expr == Data_load[n,h] * 0.0)
-            '''
+            
         # 3.Voltage balance on line
         for n in range(Para.N_line):
             bus_head = Para.Line[n,1]
@@ -532,7 +530,7 @@ def Reconfig(Para,Info,Result_Planning,s,t):
             expr = expr + Var[N_S_gen + n, h]
             expr = expr + Var[N_C_gen + n, h]
             model.addConstr(expr == x_gen[n] * Data_gen[n,h])
-        '''
+        
         # 5.Linearization of quadratic terms in line equations
         for n in range(Para.N_line):
             expr_0 = Var[N_P_line + n, h] + Var[N_Q_line + n, h]
@@ -572,7 +570,7 @@ def Reconfig(Para,Info,Result_Planning,s,t):
             expr_1 = Para.Sub_S[n,0] + x_sub[n] * Para.Sub_S[n,1]
             model.addConstr(expr_0 >= 0)
             model.addConstr(expr_0 <= 1.414 * expr_1)
-        '''
+        
         # 8.Bounds of variables
         # 1) Voltage
         for n in range(Para.N_bus):
@@ -592,7 +590,7 @@ def Reconfig(Para,Info,Result_Planning,s,t):
                 model.addConstr(Var[N_Q_line + n, h] <=  y_line[n] * Para.Big_M)
                 model.addConstr(Var[N_Q_line + n, h] >= -expr)
                 model.addConstr(Var[N_Q_line + n, h] <=  expr)
-            if Para.Line[n,9] == 0:
+            if Para.Line[n,9] == 1:
                 model.addConstr(Var[N_Q_line + n, h] ==  0)
         # 3) Converter
         for n in range(Para.N_conv):
