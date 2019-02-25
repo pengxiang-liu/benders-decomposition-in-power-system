@@ -467,6 +467,10 @@ def Reconfig(Para,Info,Result_Planning,s,t):
             expr = expr + quicksum(Var[N_P_line + i, h] for i in line_tail)
             expr = expr - quicksum(Var[N_P_conv + i, h] for i in conv_head)
             expr = expr + quicksum(Var[N_P_conv + i, h] for i in conv_tail)
+            if Para.Bus[n,7] == 0:  # AC bus
+                expr = expr + Var[N_C_load + n, h] * Para.Factor[0]
+            if Para.Bus[n,7] == 1:  # DC bus
+                expr = expr + Var[N_C_load + n, h] * 1.0
             if n in Para.Sub[:,1]:
                 bus_no = int(np.where(n == Para.Sub[:,1])[0])
                 expr = expr + Var[N_P_sub + bus_no, h]
@@ -478,10 +482,8 @@ def Reconfig(Para,Info,Result_Planning,s,t):
                     expr = expr + Var[N_S_gen + bus_no, h] * Para.Factor[0]
             # Add constraint
             if Para.Bus[n,7] == 0:  # AC bus
-                expr = expr + Var[N_C_load + n, h] * Para.Factor[0]
                 model.addConstr(expr == Data_load[n,h] * Para.Factor[0])
             if Para.Bus[n,7] == 1:  # DC bus
-                expr = expr + Var[N_C_load + n, h] * 1.0
                 model.addConstr(expr == Data_load[n,h] * 1.0)
         
         # 2.Reactive power balance equation
@@ -495,7 +497,12 @@ def Reconfig(Para,Info,Result_Planning,s,t):
             expr = LinExpr()
             expr = expr - quicksum(Var[N_Q_line + i, h] for i in line_head)
             expr = expr + quicksum(Var[N_Q_line + i, h] for i in line_tail)
-            expr = expr + Var[N_C_load + n, h] * Para.Factor[1]
+            if Para.Bus[n,7] == 0:  # AC bus
+                expr = expr - quicksum(Var[N_Q_conv + i, h] for i in conv_head)
+                expr = expr + quicksum(Var[N_Q_conv + i, h] for i in conv_tail)
+                expr = expr + Var[N_C_load + n, h] * Para.Factor[1]
+            if Para.Bus[n,7] == 1:  # DC bus
+                expr = expr + Var[N_C_load + n, h] * 0.0
             if n in Para.Sub[:,1]:
                 bus_no = int(np.where(n == Para.Sub[:,1])[0])
                 expr = expr + Var[N_Q_sub + bus_no, h]
@@ -507,8 +514,6 @@ def Reconfig(Para,Info,Result_Planning,s,t):
                     expr = expr + Var[N_S_gen + bus_no, h] * Para.Factor[1]
             # Add constraint
             if Para.Bus[n,7] == 0:  # AC bus
-                expr = expr - quicksum(Var[N_Q_conv + i, h] for i in conv_head)
-                expr = expr + quicksum(Var[N_Q_conv + i, h] for i in conv_tail)
                 model.addConstr(expr == Data_load[n,h] * Para.Factor[1])
             if Para.Bus[n,7] == 1:  # DC bus
                 model.addConstr(expr == Data_load[n,h] * 0.0)
