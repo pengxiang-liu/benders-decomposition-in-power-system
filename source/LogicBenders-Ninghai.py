@@ -30,7 +30,7 @@ class Parameter(object):
         self.N_year   = 5   # number of year in each stage
         self.N_scene  = 16  # number of reconfiguration scenario
         self.N_hour   = 6   # number of hour in each scenario
-        self.N_time   = 22.5  # number of times
+        self.N_time   = 90  # number of times
         self.Int_rate = 0.05  # interest rate
         self.Big_M = 500  # Big M
         self.Factor = [0.95,math.sqrt(1-0.95**2)]  # power factor
@@ -109,12 +109,19 @@ class BusInfo(object):
 
 # This class restores the results of planning master problem
 class ResultPlanning(object):
-    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,y_line):
+    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,y_line,
+                 obj_con,obj_opr):
+        # Variables
         self.x_line = GurobiValue(x_line,'integer')
         self.x_conv = GurobiValue(x_conv,'integer')
         self.x_sub  = GurobiValue(x_sub, 'integer')
         self.x_gen  = GurobiValue(x_gen, 'integer')
         self.y_line = GurobiValue(y_line,'integer')
+        # Objective
+        self.obj_con = obj_con.getValue()
+        self.obj_opr = obj_opr.x
+        self.obj = (model.getObjective()).getValue()
+
 
 
 # This class restores the results of reconfiguration worker-problem
@@ -143,6 +150,24 @@ class ResultReconfig(object):
         self.dual_x_gen  = np.array([dual.pop(0) for n in range(Para.N_gen )])
         self.dual_y_line = np.array([dual.pop(0) for n in range(Para.N_line)])
         
+
+# This class formulates the traditional and logic Benders cut
+class BendersInfo(object):
+    def __init__(self,Para,Result_Planning):
+        # Given planning and reconfiguration
+        self.x_line = Result_Planning.x_line
+        self.x_conv = Result_Planning.x_conv
+        self.x_sub  = Result_Planning.x_sub
+        self.x_gen  = Result_Planning.x_gen
+        self.y_line = Result_Planning.y_line
+        # Dual information
+        self.dual_x_line = np.zeros((Para.N_line, Para.N_stage))
+        self.dual_x_conv = np.zeros((Para.N_conv, Para.N_stage))
+        self.dual_x_sub  = np.zeros((Para.N_sub , Para.N_stage))
+        self.dual_x_gen  = np.zeros((Para.N_gen , Para.N_stage))
+        self.dual_y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
+        # Objective
+        self.obj = 0
 
 
 # This class restores the 'plot' function
@@ -192,23 +217,6 @@ class PlotFunc(object):
                 plt.plot(x[tail],y[tail],'bs')
         plt.axis('equal')
         plt.show()
-
-
-# This class formulates the traditional and logic Benders cut
-class BendersInfo(object):
-    def __init__(self,Para,Result_Planning):
-        # Given planning and reconfiguration
-        self.x_line = Result_Planning.x_line
-        self.x_conv = Result_Planning.x_conv
-        self.x_sub  = Result_Planning.x_sub
-        self.x_gen  = Result_Planning.x_gen
-        self.y_line = Result_Planning.y_line
-        # Dual information
-        self.dual_x_line = np.zeros((Para.N_line, Para.N_stage))
-        self.dual_x_conv = np.zeros((Para.N_conv, Para.N_stage))
-        self.dual_x_sub  = np.zeros((Para.N_sub , Para.N_stage))
-        self.dual_x_gen  = np.zeros((Para.N_gen , Para.N_stage))
-        self.dual_y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
 
 
 # This function input data from Excel files. The filtname can be changed 
@@ -327,7 +335,6 @@ def Planning(Para,Info,Power):
             obj_con = obj_con + RR * x_sub [n,t] * Para.Sub [n][4] * Para.Dep_sub
         for n in range(Para.N_gen):  # renewables generation
             obj_con = obj_con + RR * x_gen [n,t] * Para.Gen [n][3] * Para.Dep_gen
-    model.setobjective(obj_con, GRB.MINIMIZE)
 
     # Constraint 1 (installation)
     for t in range(Para.N_stage-1):
@@ -415,24 +422,29 @@ def Planning(Para,Info,Power):
     if len(Power) == 0:
         model.addConstr(obj_opr >= 0)
     else:
-        for i in len(Power):
+        for i in range(len(Power)):
             expr = LinExpr()
             for t in range(Para.N_stage):
                 for n in range(Para.N_line):
-                    expr = expr + Power[i].dual_x_line * (x_line[n,t] - Power[i].x_line[n,t])
+                    expr = expr + Power[i].dual_x_line[n,t] * (x_line[n,t] - Power[i].x_line[n,t])
                 for n in range(Para.N_conv):
-                    expr = expr + Power[i].dual_x_conv * (x_conv[n,t] - Power[i].x_conv[n,t])
+                    expr = expr + Power[i].dual_x_conv[n,t] * (x_conv[n,t] - Power[i].x_conv[n,t])
                 for n in range(Para.N_sub ):
-                    expr = expr + Power[i].dual_x_sub  * (x_sub [n,t] - Power[i].x_sub [n,t])
+                    expr = expr + Power[i].dual_x_sub[n,t]  * (x_sub [n,t] - Power[i].x_sub [n,t])
                 for n in range(Para.N_gen ):
-                    expr = expr + Power[i].dual_x_gen  * (x_gen [n,t] - Power[i].x_gen [n,t])
-                for n in range(Para.N_line):
-                    expr = expr + Power[i].dual_y_line * (y_line[n,t] - Power[i].y_line[n,t])
-
+                    expr = expr + Power[i].dual_x_gen[n,t]  * (x_gen [n,t] - Power[i].x_gen [n,t])
+                for s in range(Para.N_scene):
+                    for n in range(Para.N_line):
+                        expr = expr + Power[i].dual_y_line[n,s,t] * (y_line[n,s,t] - Power[i].y_line[n,s,t])
+            model.addConstr(obj_opr >= Power[i].obj + expr)
+    
     # Optimize
+    model.setObjective(obj_con + obj_opr, GRB.MINIMIZE)
+    model.setParam("MIPGap", 1e-2)
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,y_line)
+        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,y_line,
+                                obj_con,obj_opr)
     return result
    
 
@@ -732,15 +744,21 @@ if __name__ == "__main__":
                 Result_Reconfig = Reconfig(Para,Info,Result_Planning,s,t)
                 obj_opr = obj_opr + Result_Reconfig.obj
                 # Tranditional Benders cut information
-                Benders_Info.dual_x_line[:,t] += Result_Reconfig.dual_x_line
-                Benders_Info.dual_x_conv[:,t] += Result_Reconfig.dual_x_conv
-                Benders_Info.dual_x_sub [:,t] += Result_Reconfig.dual_x_sub
-                Benders_Info.dual_x_gen [:,t] += Result_Reconfig.dual_x_gen
+                Benders_Info.dual_x_line[:,t]  += Result_Reconfig.dual_x_line
+                Benders_Info.dual_x_conv[:,t]  += Result_Reconfig.dual_x_conv
+                Benders_Info.dual_x_sub [:,t]  += Result_Reconfig.dual_x_sub
+                Benders_Info.dual_x_gen [:,t]  += Result_Reconfig.dual_x_gen
+                Benders_Info.dual_y_line[:,s,t] = Result_Reconfig.dual_y_line
+        Benders_Info.obj = obj_opr
         Power.append(Benders_Info)
         # Updating lower and upper bound
         lower_bound.append(Result_Planning.obj)
         upper_bound.append(Result_Planning.obj_con + obj_opr)
-
+        gap = (upper_bound[-1]-lower_bound[-1])/upper_bound[-1]
+        if gap <= 1e-2 or n_iter > 50:
+            break
+        else:
+            n_iter = n_iter + 1
     '''
     # Figure
     Plot = PlotFunc(Para)
