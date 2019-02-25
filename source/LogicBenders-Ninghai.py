@@ -119,19 +119,31 @@ class ResultPlanning(object):
 
 # This class restores the results of reconfiguration worker-problem
 class ResultReconfig(object):
-    def __init__(self,model,Para,Var):
-        Var = GurobiValue(Var)
-        self.V_bus  = Var[N_V_bus  : N_V_bus  + Para.N_bus, :]
-        self.P_line = Var[N_P_line : N_P_line + Para.N_line,:]
-        self.Q_line = Var[N_Q_line : N_Q_line + Para.N_line,:]
-        self.P_conv = Var[N_P_conv : N_P_conv + Para.N_conv,:]
-        self.Q_conv = Var[N_Q_conv : N_Q_conv + Para.N_conv,:]
-        self.P_sub  = Var[N_P_sub  : N_P_sub  + Para.N_sub ,:]
-        self.Q_sub  = Var[N_Q_sub  : N_Q_sub  + Para.N_sub ,:]
-        self.C_load = Var[N_C_load : N_C_load + Para.N_bus ,:]
-        self.S_gen  = Var[N_S_gen  : N_S_gen  + Para.N_gen ,:]
-        self.C_gen  = Var[N_C_gen  : N_C_gen  + Para.N_gen ,:]
+    def __init__(self,model,Para,Var,N_con):
+        # Saving objective
+        self.obj = (model.getObjective()).getValue()
+        # Saving variables
+        var = GurobiValue(Var)
+        self.V_bus  = var[N_V_bus  : N_V_bus  + Para.N_bus, :]
+        self.P_line = var[N_P_line : N_P_line + Para.N_line,:]
+        self.Q_line = var[N_Q_line : N_Q_line + Para.N_line,:]
+        self.P_conv = var[N_P_conv : N_P_conv + Para.N_conv,:]
+        self.Q_conv = var[N_Q_conv : N_Q_conv + Para.N_conv,:]
+        self.P_sub  = var[N_P_sub  : N_P_sub  + Para.N_sub ,:]
+        self.Q_sub  = var[N_Q_sub  : N_Q_sub  + Para.N_sub ,:]
+        self.C_load = var[N_C_load : N_C_load + Para.N_bus ,:]
+        self.S_gen  = var[N_S_gen  : N_S_gen  + Para.N_gen ,:]
+        self.C_gen  = var[N_C_gen  : N_C_gen  + Para.N_gen ,:]
+        # Saving dual information
+        constr = model.getConstrs()
+        dual = [constr[n].pi  for n in range(N_con[-2],N_con[-1])]
+        self.dual_x_line = np.array([dual.pop(0) for n in range(Para.N_line)])
+        self.dual_x_conv = np.array([dual.pop(0) for n in range(Para.N_conv)])
+        self.dual_x_sub  = np.array([dual.pop(0) for n in range(Para.N_sub )])
+        self.dual_x_gen  = np.array([dual.pop(0) for n in range(Para.N_gen )])
+        self.dual_y_line = np.array([dual.pop(0) for n in range(Para.N_line)])
         
+
 
 # This class restores the 'plot' function
 class PlotFunc(object):
@@ -180,6 +192,23 @@ class PlotFunc(object):
                 plt.plot(x[tail],y[tail],'bs')
         plt.axis('equal')
         plt.show()
+
+
+# This class formulates the traditional and logic Benders cut
+class BendersInfo(object):
+    def __init__(self,Para,Result_Planning):
+        # Given planning and reconfiguration
+        self.x_line = Result_Planning.x_line
+        self.x_conv = Result_Planning.x_conv
+        self.x_sub  = Result_Planning.x_sub
+        self.x_gen  = Result_Planning.x_gen
+        self.y_line = Result_Planning.y_line
+        # Dual information
+        self.dual_x_line = np.zeros((Para.N_line, Para.N_stage))
+        self.dual_x_conv = np.zeros((Para.N_conv, Para.N_stage))
+        self.dual_x_sub  = np.zeros((Para.N_sub , Para.N_stage))
+        self.dual_x_gen  = np.zeros((Para.N_gen , Para.N_stage))
+        self.dual_y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
 
 
 # This function input data from Excel files. The filtname can be changed 
@@ -255,7 +284,7 @@ def GurobiValue(var,string = 'continuous'):
     return matrix_var
 
 
-def Planning(Para,Info):
+def Planning(Para,Info,Power):
     #
     # minimize
     #       Investment costs of line, converter, substation and
@@ -281,22 +310,24 @@ def Planning(Para,Info):
     f_load = model.addVars(Para.N_bus,  Para.N_scene, Para.N_stage, lb = -1e2)
     f_gen  = model.addVars(Para.N_gen,  Para.N_scene, Para.N_stage, lb = -1e2)
     f_sub  = model.addVars(Para.N_sub,  Para.N_scene, Para.N_stage, lb = -1e2)
+    #
+    obj_opr = model.addVar()
 
     # Set objective
-    obj = LinExpr()
+    obj_con = LinExpr()
     for t in range(Para.N_stage):
         RR = 0  # Reconvery rate in 5 years
         for y in range(Para.N_year):
             RR = RR + (1 + Para.Int_rate) ** (-(t * Para.N_year + y + 1))
         for n in range(Para.N_line):  # line
-            obj = obj + RR * x_line[n,t] * Para.Line[n][8] * Para.Dep_line
+            obj_con = obj_con + RR * x_line[n,t] * Para.Line[n][8] * Para.Dep_line
         for n in range(Para.N_conv):  # converter
-            obj = obj + RR * x_conv[n,t] * Para.Conv[n][4] * Para.Dep_conv
+            obj_con = obj_con + RR * x_conv[n,t] * Para.Conv[n][4] * Para.Dep_conv
         for n in range(Para.N_sub):  # substation
-            obj = obj + RR * x_sub [n,t] * Para.Sub [n][4] * Para.Dep_sub
+            obj_con = obj_con + RR * x_sub [n,t] * Para.Sub [n][4] * Para.Dep_sub
         for n in range(Para.N_gen):  # renewables generation
-            obj = obj + RR * x_gen [n,t] * Para.Gen [n][3] * Para.Dep_gen
-    model.setObjective(obj, GRB.MINIMIZE)
+            obj_con = obj_con + RR * x_gen [n,t] * Para.Gen [n][3] * Para.Dep_gen
+    model.setobjective(obj_con, GRB.MINIMIZE)
 
     # Constraint 1 (installation)
     for t in range(Para.N_stage-1):
@@ -380,6 +411,24 @@ def Planning(Para,Info):
             else:
                 model.addConstr(x_gen[n,t] == 0)
 
+    # Benders cut
+    if len(Power) == 0:
+        model.addConstr(obj_opr >= 0)
+    else:
+        for i in len(Power):
+            expr = LinExpr()
+            for t in range(Para.N_stage):
+                for n in range(Para.N_line):
+                    expr = expr + Power[i].dual_x_line * (x_line[n,t] - Power[i].x_line[n,t])
+                for n in range(Para.N_conv):
+                    expr = expr + Power[i].dual_x_conv * (x_conv[n,t] - Power[i].x_conv[n,t])
+                for n in range(Para.N_sub ):
+                    expr = expr + Power[i].dual_x_sub  * (x_sub [n,t] - Power[i].x_sub [n,t])
+                for n in range(Para.N_gen ):
+                    expr = expr + Power[i].dual_x_gen  * (x_gen [n,t] - Power[i].x_gen [n,t])
+                for n in range(Para.N_line):
+                    expr = expr + Power[i].dual_y_line * (y_line[n,t] - Power[i].y_line[n,t])
+
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
@@ -453,6 +502,8 @@ def Reconfig(Para,Info,Result_Planning,s,t):
     model.setObjective(obj, GRB.MINIMIZE)
 
     # Set constraints
+    N_con = []  # indexing constraints
+
     for h in range(Para.N_hour):
         # 1.Active power balance equation
         for n in range(Para.N_bus):
@@ -627,40 +678,68 @@ def Reconfig(Para,Info,Result_Planning,s,t):
         for n in range(Para.N_gen):
             model.addConstr(Var[N_C_gen + n, h] >= 0)
             model.addConstr(Var[N_C_gen + n, h] <= Data_gen[n,h])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
 
     # Equations
     for n in range(Para.N_line):
         model.addConstr(x_line[n] == Result_Planning.x_line[n,t])
-        model.addConstr(y_line[n] == Result_Planning.y_line[n,s,t])
     for n in range(Para.N_conv):
         model.addConstr(x_conv[n] == Result_Planning.x_conv[n,t])
     for n in range(Para.N_sub):
-        model.addConstr(x_sub[n] == Result_Planning.x_sub[n,t])
+        model.addConstr(x_sub [n] == Result_Planning.x_sub [n,t])
     for n in range(Para.N_gen):
-        model.addConstr(x_gen[n] == Result_Planning.x_gen[n,t])
+        model.addConstr(x_gen [n] == Result_Planning.x_gen [n,t])
+    for n in range(Para.N_line):
+        model.addConstr(y_line[n] == Result_Planning.y_line[n,s,t])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
     
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultReconfig(model,Para,Var)
+        result = ResultReconfig(model,Para,Var,N_con)
     return result
 
 
 if __name__ == "__main__":
 
-    # Input parameter
-    filename = "data/Data-Ninghai.xlsx"
-    Data = ReadData(filename)
+    time_start=time.time()
 
-    # Data formulation
+    # Input parameter
+    filename = "data/Data-Ninghai.xlsx"  # file name
+    Data = ReadData(filename)  # Data
     Para = Parameter(Data)  # System parameter
-    Info = BusInfo(Para)
+    Info = BusInfo(Para)  # Bus information
 
     # Benders decomposition
-    Result_Planning = Planning(Para,Info)
-    for t in range(Para.N_stage):
-        for s in range(Para.N_scene):
-            Result_Reconfig = Reconfig(Para,Info,Result_Planning,2,1)
+    lower_bound = []  #
+    upper_bound = []  #
+    # benders cut for power flow information
+    Logic = []
+    Power = []
+    # Iteration
+    n_iter = 0  # index of iteration
+    while True:
+        # Master-problem
+        Result_Planning = Planning(Para,Info,Power)
+        # Worker-problem
+        obj_opr = 0
+        Benders_Info = BendersInfo(Para,Result_Planning)
+        for t in range(Para.N_stage):
+            for s in range(Para.N_scene):
+                # Reconfiguration
+                Result_Reconfig = Reconfig(Para,Info,Result_Planning,s,t)
+                obj_opr = obj_opr + Result_Reconfig.obj
+                # Tranditional Benders cut information
+                Benders_Info.dual_x_line[:,t] += Result_Reconfig.dual_x_line
+                Benders_Info.dual_x_conv[:,t] += Result_Reconfig.dual_x_conv
+                Benders_Info.dual_x_sub [:,t] += Result_Reconfig.dual_x_sub
+                Benders_Info.dual_x_gen [:,t] += Result_Reconfig.dual_x_gen
+        Power.append(Benders_Info)
+        # Updating lower and upper bound
+        lower_bound.append(Result_Planning.obj)
+        upper_bound.append(Result_Planning.obj_con + obj_opr)
 
     '''
     # Figure
@@ -668,6 +747,8 @@ if __name__ == "__main__":
     Plot.Planning(Para,Result_Planning,0)
     Plot.Reconfig(Para,Result_Planning,0,0)
     '''
-
+    time_end=time.time()
+    print('totally cost',time_end-time_start)
+    
     n = 1
     
