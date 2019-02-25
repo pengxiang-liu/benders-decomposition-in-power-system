@@ -410,8 +410,8 @@ def Reconfig(Para,Info,Result_Planning,s,t):
         for n in range(Para.N_bus):
             Data_load[n,h] = Para.Load[n,t] * Para.Ty_load[index_hour]
         for n in range(Para.N_gen):
-            k = int(Para.Gen[n,6])  # type of renewables
-            Data_gen [n,h] = Para.Gen [n,2] * Para.Ty_gen [index_hour,k]
+            gen_type = int(Para.Gen[n,6])  # type of renewables
+            Data_gen [n,h] = Para.Gen [n,2] * Para.Ty_gen [index_hour,gen_type]
 
     # Model
     model = Model()
@@ -467,7 +467,6 @@ def Reconfig(Para,Info,Result_Planning,s,t):
             expr = expr + quicksum(Var[N_P_line + i, h] for i in line_tail)
             expr = expr - quicksum(Var[N_P_conv + i, h] for i in conv_head)
             expr = expr + quicksum(Var[N_P_conv + i, h] for i in conv_tail)
-            expr = expr + Var[N_C_load + n, h] * Para.Factor[0]
             if n in Para.Sub[:,1]:
                 bus_no = int(np.where(n == Para.Sub[:,1])[0])
                 expr = expr + Var[N_P_sub + bus_no, h]
@@ -479,8 +478,10 @@ def Reconfig(Para,Info,Result_Planning,s,t):
                     expr = expr + Var[N_S_gen + bus_no, h] * Para.Factor[0]
             # Add constraint
             if Para.Bus[n,7] == 0:  # AC bus
+                expr = expr + Var[N_C_load + n, h] * Para.Factor[0]
                 model.addConstr(expr == Data_load[n,h] * Para.Factor[0])
             if Para.Bus[n,7] == 1:  # DC bus
+                expr = expr + Var[N_C_load + n, h] * 1.0
                 model.addConstr(expr == Data_load[n,h] * 1.0)
         
         # 2.Reactive power balance equation
@@ -494,8 +495,6 @@ def Reconfig(Para,Info,Result_Planning,s,t):
             expr = LinExpr()
             expr = expr - quicksum(Var[N_Q_line + i, h] for i in line_head)
             expr = expr + quicksum(Var[N_Q_line + i, h] for i in line_tail)
-            expr = expr - quicksum(Var[N_Q_conv + i, h] for i in conv_head)
-            expr = expr + quicksum(Var[N_Q_conv + i, h] for i in conv_tail)
             expr = expr + Var[N_C_load + n, h] * Para.Factor[1]
             if n in Para.Sub[:,1]:
                 bus_no = int(np.where(n == Para.Sub[:,1])[0])
@@ -508,10 +507,12 @@ def Reconfig(Para,Info,Result_Planning,s,t):
                     expr = expr + Var[N_S_gen + bus_no, h] * Para.Factor[1]
             # Add constraint
             if Para.Bus[n,7] == 0:  # AC bus
+                expr = expr - quicksum(Var[N_Q_conv + i, h] for i in conv_head)
+                expr = expr + quicksum(Var[N_Q_conv + i, h] for i in conv_tail)
                 model.addConstr(expr == Data_load[n,h] * Para.Factor[1])
             if Para.Bus[n,7] == 1:  # DC bus
                 model.addConstr(expr == Data_load[n,h] * 0.0)
-            
+        
         # 3.Voltage balance on line
         for n in range(Para.N_line):
             bus_head = Para.Line[n,1]
@@ -622,16 +623,16 @@ def Reconfig(Para,Info,Result_Planning,s,t):
             model.addConstr(Var[N_C_gen + n, h] >= 0)
             model.addConstr(Var[N_C_gen + n, h] <= Data_gen[n,h])
 
-        # 9.Equations
-        for n in range(Para.N_line):
-            model.addConstr(x_line[n] == Result_Planning.x_line[n,t])
-            model.addConstr(y_line[n] == Result_Planning.y_line[n,s,t])
-        for n in range(Para.N_conv):
-            model.addConstr(x_conv[n] == Result_Planning.x_conv[n,t])
-        for n in range(Para.N_sub):
-            model.addConstr(x_sub[n] == Result_Planning.x_sub[n,t])
-        for n in range(Para.N_gen):
-            model.addConstr(x_gen[n] == Result_Planning.x_gen[n,t])
+    # Equations
+    for n in range(Para.N_line):
+        model.addConstr(x_line[n] == Result_Planning.x_line[n,t])
+        model.addConstr(y_line[n] == Result_Planning.y_line[n,s,t])
+    for n in range(Para.N_conv):
+        model.addConstr(x_conv[n] == Result_Planning.x_conv[n,t])
+    for n in range(Para.N_sub):
+        model.addConstr(x_sub[n] == Result_Planning.x_sub[n,t])
+    for n in range(Para.N_gen):
+        model.addConstr(x_gen[n] == Result_Planning.x_gen[n,t])
     
     # Optimize
     model.optimize()
@@ -654,7 +655,7 @@ if __name__ == "__main__":
     Result_Planning = Planning(Para,Info)
     for t in range(Para.N_stage):
         for s in range(Para.N_scene):
-            Result_Reconfig = Reconfig(Para,Info,Result_Planning,s,t)
+            Result_Reconfig = Reconfig(Para,Info,Result_Planning,2,1)
 
     '''
     # Figure
