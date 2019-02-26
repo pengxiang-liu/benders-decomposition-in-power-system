@@ -109,19 +109,34 @@ class BusInfo(object):
 
 # This class restores the results of planning master problem
 class ResultMasterMILP(object):
-    def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,y_line,
-                 obj_con,obj_opr):
-        # Variables
-        self.x_line = GurobiValue(x_line,'integer')
-        self.x_conv = GurobiValue(x_conv,'integer')
-        self.x_sub  = GurobiValue(x_sub, 'integer')
-        self.x_gen  = GurobiValue(x_gen, 'integer')
-        self.y_line = GurobiValue(y_line,'integer')
-        # Objective
-        self.obj_con = obj_con.getValue()
-        self.obj_opr = obj_opr.x
-        self.obj = (model.getObjective()).getValue()
-
+    def __init__(self,model,Para,var):
+        variable = var.copy()
+        x_line = np.zeros((Para.N_line, Para.N_stage))
+        x_conv = np.zeros((Para.N_conv, Para.N_stage))
+        x_sub  = np.zeros((Para.N_sub , Para.N_stage))
+        x_gen  = np.zeros((Para.N_gen , Para.N_stage))
+        y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
+        for n in range(Para.N_line):
+            for t in range(Para.N_stage):
+                x_line[n,t] = variable.pop(0)
+        for n in range(Para.N_conv):
+            for t in range(Para.N_stage):
+                x_conv[n,t] = variable.pop(0)
+        for n in range(Para.N_sub ):
+            for t in range(Para.N_stage):
+                x_sub [n,t] = variable.pop(0)
+        for n in range(Para.N_gen ):
+            for t in range(Para.N_stage):
+                x_gen [n,t] = variable.pop(0)
+        for n in range(Para.N_line):
+            for s in range(Para.N_scene):
+                for t in range(Para.N_stage):
+                    y_line[n,s,t] = variable.pop(0)
+        self.x_line = x_line
+        self.x_conv = x_conv
+        self.x_sub  = x_sub
+        self.x_gen  = x_gen
+        self.y_line = y_line
 
 
 # This class restores the results of reconfiguration worker-problem
@@ -129,28 +144,14 @@ class ResultWorkerLP(object):
     def __init__(self,model,Para,Var,N_con):
         # Saving objective
         self.obj = (model.getObjective()).getValue()
-        '''
-        # Saving variables
-        var = GurobiValue(Var)
-        self.V_bus  = var[N_V_bus  : N_V_bus  + Para.N_bus, :]
-        self.P_line = var[N_P_line : N_P_line + Para.N_line,:]
-        self.Q_line = var[N_Q_line : N_Q_line + Para.N_line,:]
-        self.P_conv = var[N_P_conv : N_P_conv + Para.N_conv,:]
-        self.Q_conv = var[N_Q_conv : N_Q_conv + Para.N_conv,:]
-        self.P_sub  = var[N_P_sub  : N_P_sub  + Para.N_sub ,:]
-        self.Q_sub  = var[N_Q_sub  : N_Q_sub  + Para.N_sub ,:]
-        self.C_load = var[N_C_load : N_C_load + Para.N_bus ,:]
-        self.S_gen  = var[N_S_gen  : N_S_gen  + Para.N_gen ,:]
-        self.C_gen  = var[N_C_gen  : N_C_gen  + Para.N_gen ,:]
-        '''
         # Saving dual information
         constr = model.getConstrs()
         dual = [constr[n].pi  for n in range(N_con[-2],N_con[-1])]
-        self.dual_x_line = np.array([dual.pop(0) for n in range(Para.N_line)])
-        self.dual_x_conv = np.array([dual.pop(0) for n in range(Para.N_conv)])
-        self.dual_x_sub  = np.array([dual.pop(0) for n in range(Para.N_sub )])
-        self.dual_x_gen  = np.array([dual.pop(0) for n in range(Para.N_gen )])
-        self.dual_y_line = np.array([dual.pop(0) for n in range(Para.N_line)])
+        self.d_x_line = np.array([dual.pop(0) for n in range(Para.N_line)])
+        self.d_x_conv = np.array([dual.pop(0) for n in range(Para.N_conv)])
+        self.d_x_sub  = np.array([dual.pop(0) for n in range(Para.N_sub )])
+        self.d_x_gen  = np.array([dual.pop(0) for n in range(Para.N_gen )])
+        self.d_y_line = np.array([dual.pop(0) for n in range(Para.N_line)])
         
 
 # This class formulates the traditional and logic Benders cut
@@ -163,11 +164,11 @@ class BendersInfo(object):
         self.x_gen  = Result_Planning.x_gen
         self.y_line = Result_Planning.y_line
         # Dual information
-        self.dual_x_line = np.zeros((Para.N_line, Para.N_stage))
-        self.dual_x_conv = np.zeros((Para.N_conv, Para.N_stage))
-        self.dual_x_sub  = np.zeros((Para.N_sub , Para.N_stage))
-        self.dual_x_gen  = np.zeros((Para.N_gen , Para.N_stage))
-        self.dual_y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
+        self.d_x_line = np.zeros((Para.N_line, Para.N_stage))
+        self.d_x_conv = np.zeros((Para.N_conv, Para.N_stage))
+        self.d_x_sub  = np.zeros((Para.N_sub , Para.N_stage))
+        self.d_x_gen  = np.zeros((Para.N_gen , Para.N_stage))
+        self.d_y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
         # Objective
         self.obj = 0
 
@@ -260,41 +261,32 @@ def Depreciation(life,rate):
     return recovery
 
 
-# This function get the value of gurobi variables
-def GurobiValue(var,string = 'continuous'):
-    key = var.keys()
-    cpy = var.copy()
-    dim = key._tuplelist__tuplelen  # dimention
-    for i in range(len(key)):
-        if string == 'integer':
-            cpy[key[i]] = int(round(var[key[i]].x))
-        else:
-            cpy[key[i]] = var[key[i]].x
-    if dim == 1:
-        dim_1 = len(key.select('*'))
-        matrix_var = np.zeros(dim_1)
-        for i in range(dim_1):
-            matrix_var[i] = cpy[i]
-    if dim == 2:
-        dim_1 = len(key.select('*',0))
-        dim_2 = len(key.select(0,'*'))
-        matrix_var = np.zeros((dim_1,dim_2))
-        for i in range(dim_1):
-            for j in range(dim_2):
-                matrix_var[i,j] = cpy[i,j]
-    if dim == 3:
-        dim_1 = len(key.select('*',0,0))
-        dim_2 = len(key.select(0,'*',0))
-        dim_3 = len(key.select(0,0,'*'))
-        matrix_var = np.zeros((dim_1,dim_2,dim_3))
-        for i in range(dim_1):
-            for j in range(dim_2):
-                for k in range(dim_3):
-                    matrix_var[i,j,k] = cpy[i,j,k]
-    return matrix_var
+# This function...
+def Indexing(Para):
+    # Master varibales
+    global N_X_line, N_X_conv, N_X_sub, N_X_gen, N_Y_line
+    N_X_line = 0
+    N_X_conv = N_X_line + Para.N_line
+    N_X_sub  = N_X_conv + Para.N_conv
+    N_X_gen  = N_X_sub  + Para.N_sub
+    N_Y_line = N_X_gen  + Para.N_gen 
+    # Operating variables
+    global N_V_bus, N_P_line, N_Q_line, N_P_conv, N_Q_conv
+    global N_P_sub, N_Q_sub,  N_C_load, N_S_gen,  N_C_gen,  N_Var
+    N_V_bus  = 0  # Square of bus voltage
+    N_P_line = N_V_bus  + Para.N_bus   # active   power flow
+    N_Q_line = N_P_line + Para.N_line  # reactive power flow
+    N_P_conv = N_Q_line + Para.N_line  # active   power flow
+    N_Q_conv = N_P_conv + Para.N_conv  # reactive power compensation
+    N_P_sub  = N_Q_conv + Para.N_conv  # power injection at substation
+    N_Q_sub  = N_P_sub  + Para.N_sub   # power injection at substation
+    N_C_load = N_Q_sub  + Para.N_sub   # Load shedding
+    N_S_gen  = N_C_load + Para.N_bus   # renewables generation
+    N_C_gen  = N_S_gen  + Para.N_gen   # renewables curtailment
+    N_Var    = N_C_gen  + Para.N_gen   # Number of all variables
 
 
-def MasterMILP(Para,Info,power):
+def createMasterMILP(Para,Info):
     #
     # minimize
     #       Investment costs of line, converter, substation and
@@ -320,8 +312,10 @@ def MasterMILP(Para,Info,power):
     f_load = model.addVars(Para.N_bus,  Para.N_scene, Para.N_stage, lb = -1e2)
     f_gen  = model.addVars(Para.N_gen,  Para.N_scene, Para.N_stage, lb = -1e2)
     f_sub  = model.addVars(Para.N_sub,  Para.N_scene, Para.N_stage, lb = -1e2)
-    #
+    # Projected operating costs
     obj_opr = model.addVar()
+
+    model.update()
 
     # Set objective
     obj_con = LinExpr()
@@ -419,42 +413,18 @@ def MasterMILP(Para,Info,power):
                 model.addConstr(x_gen[n,t] == 1)
             else:
                 model.addConstr(x_gen[n,t] == 0)
-
-    # Benders cut
-    if len(power) == 0:
-        model.addConstr(obj_opr >= 0)
-    else:
-        for i in range(len(power)):
-            expr = LinExpr()
-            for t in range(Para.N_stage):
-                for n in range(Para.N_line):
-                    expr = expr + power[i].dual_x_line[n,t] * (x_line[n,t] - power[i].x_line[n,t])
-                for n in range(Para.N_conv):
-                    expr = expr + power[i].dual_x_conv[n,t] * (x_conv[n,t] - power[i].x_conv[n,t])
-                for n in range(Para.N_sub ):
-                    expr = expr + power[i].dual_x_sub[n,t]  * (x_sub [n,t] - power[i].x_sub [n,t])
-                for n in range(Para.N_gen ):
-                    expr = expr + power[i].dual_x_gen[n,t]  * (x_gen [n,t] - power[i].x_gen [n,t])
-                for s in range(Para.N_scene):
-                    for n in range(Para.N_line):
-                        expr = expr + power[i].dual_y_line[n,s,t] * (y_line[n,s,t] - power[i].y_line[n,s,t])
-            model.addConstr(obj_opr >= power[i].obj + expr)
     
-    # Optimize
+    # Set objective
     model.setObjective(obj_con + obj_opr, GRB.MINIMIZE)
-    model.setParam("MIPGap", 0.1)
-    model.optimize()
-    if model.status == GRB.Status.OPTIMAL:
-        result = ResultMasterMILP(model,Para,x_line,x_conv,x_sub,x_gen,y_line,
-                                obj_con,obj_opr)
-    return result
+    model.update()
+    return model
    
 
 # This function creates the reconfiguration worker problem. Dual variables 
 # are returned for generating Benders cut. The problem is formulated under
 # a given scenario 's' at stage 't'.
 #
-def Reconfig(Para,Info,Result_Planning,s,t):
+def createWorkerLP(Para,Info,s,t):
     #
     # minimize
     #       Costs of power purchasing, load shedding, renewables generation
@@ -465,6 +435,10 @@ def Reconfig(Para,Info,Result_Planning,s,t):
     #       3) Optimal power flow
     #       4) Upper and lower bound
     #
+
+    # Display
+    number = t * Para.N_scene + s
+    print('Formulating No.%d model' % number)
     # Scenario Data
     Data_gen  = np.zeros((Para.N_gen,Para.N_hour))
     Data_load = np.zeros((Para.N_bus,Para.N_hour))
@@ -478,8 +452,6 @@ def Reconfig(Para,Info,Result_Planning,s,t):
 
     # Model
     model = Model()
-    global N_V_bus, N_P_line, N_Q_line, N_P_conv, N_Q_conv
-    global N_P_sub, N_Q_sub,  N_C_load, N_S_gen,  N_C_gen
 
     # Create reconfiguration variables
     x_line = model.addVars(Para.N_line)  # line
@@ -488,17 +460,6 @@ def Reconfig(Para,Info,Result_Planning,s,t):
     x_gen  = model.addVars(Para.N_gen)   # renewables
     y_line = model.addVars(Para.N_line)  # reconfiguration
     # Create power flow variables
-    N_V_bus  = 0  # Square of bus voltage
-    N_P_line = N_V_bus  + Para.N_bus   # active   power flow
-    N_Q_line = N_P_line + Para.N_line  # reactive power flow
-    N_P_conv = N_Q_line + Para.N_line  # active   power flow
-    N_Q_conv = N_P_conv + Para.N_conv  # reactive power compensation
-    N_P_sub  = N_Q_conv + Para.N_conv  # power injection at substation
-    N_Q_sub  = N_P_sub  + Para.N_sub   # power injection at substation
-    N_C_load = N_Q_sub  + Para.N_sub   # Load shedding
-    N_S_gen  = N_C_load + Para.N_bus   # renewables generation
-    N_C_gen  = N_S_gen  + Para.N_gen   # renewables curtailment
-    N_Var    = N_C_gen  + Para.N_gen   # Number of all variables
     Var = model.addVars(N_Var, Para.N_hour, lb = -GRB.INFINITY)
 
     # Set objective
@@ -690,103 +651,142 @@ def Reconfig(Para,Info,Result_Planning,s,t):
         for n in range(Para.N_gen):
             model.addConstr(Var[N_C_gen + n, h] >= 0)
             model.addConstr(Var[N_C_gen + n, h] <= Data_gen[n,h])
-    
     model.update()
     return model
 
 
-def WorkerLP(Para,Info,Result_Planning,ModelPool,s,t):
-    # Index
-    IND_x_line = 0
-    IND_x_conv = IND_x_line + Para.N_line
-    IND_x_sub  = IND_x_conv + Para.N_conv
-    IND_x_gen  = IND_x_sub  + Para.N_sub
-    IND_y_line = IND_x_gen  + Para.N_gen 
+def WorkerLP(Para,Info,Res_Master,WorkerPool,s,t):
     # Model formulation
-    model = ModelPool[t * Para.N_scene + s].copy()
+    model = WorkerPool[t * Para.N_scene + s].copy()
     model.update()
+    # Number of constraints
     N_con = []
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))
     # Add constraints
     var = model.getVars()
     for n in range(Para.N_line):
-        model.addConstr(var[IND_x_line + n] == Result_Planning.x_line[n,t])
+        model.addConstr(var[N_X_line + n] == Res_Master.x_line[n,t])
     for n in range(Para.N_conv):
-        model.addConstr(var[IND_x_conv + n] == Result_Planning.x_conv[n,t])
-    for n in range(Para.N_sub):
-        model.addConstr(var[IND_x_sub  + n] == Result_Planning.x_sub [n,t])
-    for n in range(Para.N_gen):
-        model.addConstr(var[IND_x_gen  + n] == Result_Planning.x_gen [n,t])
+        model.addConstr(var[N_X_conv + n] == Res_Master.x_conv[n,t])
+    for n in range(Para.N_sub ):
+        model.addConstr(var[N_X_sub  + n] == Res_Master.x_sub [n,t])
+    for n in range(Para.N_gen ):
+        model.addConstr(var[N_X_gen  + n] == Res_Master.x_gen [n,t])
     for n in range(Para.N_line):
-        model.addConstr(var[IND_y_line + n] == Result_Planning.y_line[n,s,t])
+        model.addConstr(var[N_Y_line + n] == Res_Master.y_line[n,s,t])
     model.update()
     N_con.append(model.getAttr(GRB.Attr.NumConstrs))
     # Optimize
+    model.Params.OutputFlag = 0  # turn off the display
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
         result = ResultWorkerLP(model,Para,var,N_con)
     return result
 
 
+# This function...
+def BendersCut(model,where):
+    if where == GRB.Callback.MIPSOL:
+        # Incumbent solutions
+        Incumbent  = model.cbGetSolution(model._vars)
+        Res_Master = ResultMasterMILP(model,Para,Incumbent)
+        # Initialize Benders cut coefficient
+        d_x_line = np.zeros((Para.N_line, Para.N_stage))
+        d_x_conv = np.zeros((Para.N_conv, Para.N_stage))
+        d_x_sub  = np.zeros((Para.N_sub , Para.N_stage))
+        d_x_gen  = np.zeros((Para.N_gen , Para.N_stage))
+        d_y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
+        d_object = 0
+        # Operating worker linear programming
+        for t in range(Para.N_stage):
+            for s in range(Para.N_scene):
+                result = WorkerLP(Para,Info,Res_Master,WorkerPool,s,t)
+                # Formulate coefficient
+                d_x_line[:,t] = d_x_line[:,t] + result.d_x_line
+                d_x_conv[:,t] = d_x_conv[:,t] + result.d_x_conv
+                d_x_sub [:,t] = d_x_sub [:,t] + result.d_x_sub
+                d_x_gen [:,t] = d_x_gen [:,t] + result.d_x_gen
+                d_y_line[:,s,t] = result.d_y_line
+                d_object = d_object + result.obj
+        # Formulate Benders cut
+        i = 0  # index of variables
+        c = d_object  # constant
+        expr = LinExpr()
+        for n in range(Para.N_line):
+            for t in range(Para.N_stage):
+                expr.addTerms(d_x_line[n,t], model._vars[i])
+                c = c - d_x_line[n,t] * Incumbent[i]
+                i = i + 1
+        for n in range(Para.N_conv):
+            for t in range(Para.N_stage):
+                expr.addTerms(d_x_conv[n,t], model._vars[i])
+                c = c - d_x_conv[n,t] * Incumbent[i]
+                i = i + 1
+        for n in range(Para.N_sub ):
+            for t in range(Para.N_stage):
+                expr.addTerms(d_x_sub [n,t], model._vars[i])
+                c = c - d_x_sub [n,t] * Incumbent[i]
+                i = i + 1
+        for n in range(Para.N_gen ):
+            for t in range(Para.N_stage):
+                expr.addTerms(d_x_gen [n,t], model._vars[i])
+                c = c - d_x_gen [n,t] * Incumbent[i]
+                i = i + 1
+        for n in range(Para.N_line):
+            for s in range(Para.N_scene):
+                for t in range(Para.N_stage):
+                    expr.addTerms(d_y_line[n,s,t], model._vars[i])
+                    c = c - d_y_line[n,s,t] * Incumbent[i]
+                    i = i + 1
+        model.cbLazy(model._vars[-1] >= expr + c)
+
+
+# This function...
+def BendersDSEP(MasterMILP,WorkerPool):
+    # Copy
+    model = MasterMILP.copy()
+    model._vars = model.getVars()
+    # Set parameters
+    model.Params.lazyConstraints = 1
+    model.Params.MIPGap = 0.1
+    model.Params.TimeLimit = 21600  # 6 hours
+    # Optimize
+    model.optimize(BendersCut)
+    # Result
+    if model.status == GRB.Status.OPTIMAL:
+        variable = (model._vars).x
+        result = ResultMasterMILP(model,Para,variable)
+        # Figure
+        plot = PlotFunc(Para)
+        plot.Planning(Para,result,2)
+        plot.Reconfig(Para,result,2,2)
+    else:
+        result = model.status
+    return result
+
+
+# Main function
 if __name__ == "__main__":
 
     time_start=time.time()
 
     # Input parameter
     filename = "data/Data-Ninghai.xlsx"  # file name
-    Data = ReadData(filename)  # Data
-    Para = Parameter(Data)  # System parameter
-    Info = BusInfo(Para)  # Bus information
+    Data = ReadData(filename)  # data
+    Para = Parameter(Data)  # system parameter
+    Info = BusInfo(Para)  # bus information
+    Indexing(Para)  # formulating global parameters
 
+    # Create model
+    MasterMILP = createMasterMILP(Para,Info)
+    WorkerPool = []
+    for t in range(Para.N_stage):
+        for s in range(Para.N_scene):
+            WorkerPool.append(createWorkerLP(Para,Info,s,t))
+    
     # Benders decomposition
-    lower_bound = []  #
-    upper_bound = []  #
-    # benders cut for power flow information
-    logic = []
-    power = []
-    model = []
-    Plot  = PlotFunc(Para)
-    # Iteration
-    n_iter = 0  # index of iteration
-    while True:
-        # Master-problem
-        Result_Planning = MasterMILP(Para,Info,power)
-        # Worker-problem
-        obj_opr = 0
-        Benders_Info = BendersInfo(Para,Result_Planning)
-        if n_iter == 0:
-            for t in range(Para.N_stage):
-                for s in range(Para.N_scene):
-                    model.append(Reconfig(Para,Info,Result_Planning,s,t))
-        for t in range(Para.N_stage):
-            for s in range(Para.N_scene):
-                # Reconfiguration
-                Result_Reconfig = WorkerLP(Para,Info,Result_Planning,model,s,t)
-                obj_opr = obj_opr + Result_Reconfig.obj
-                # Tranditional Benders cut information
-                Benders_Info.dual_x_line[:,t]  += Result_Reconfig.dual_x_line
-                Benders_Info.dual_x_conv[:,t]  += Result_Reconfig.dual_x_conv
-                Benders_Info.dual_x_sub [:,t]  += Result_Reconfig.dual_x_sub
-                Benders_Info.dual_x_gen [:,t]  += Result_Reconfig.dual_x_gen
-                Benders_Info.dual_y_line[:,s,t] = Result_Reconfig.dual_y_line
-        Benders_Info.obj = obj_opr
-        power.append(Benders_Info)
-        # Updating lower and upper bound
-        lower_bound.append(Result_Planning.obj)
-        upper_bound.append(Result_Planning.obj_con + obj_opr)
-        gap = (upper_bound[-1]-lower_bound[-1])/upper_bound[-1]
-        if gap <= 1e-2 or n_iter > 1000:
-            break
-        else:
-            n_iter = n_iter + 1
-    '''
-    # Figure
-    Plot = PlotFunc(Para)
-    Plot.Planning(Para,Result_Planning,0)
-    Plot.Reconfig(Para,Result_Planning,0,0)
-    '''
+    Result_DSEP = BendersDSEP(MasterMILP,WorkerPool)
+
     time_end=time.time()
     print('totally cost',time_end-time_start)
-    
-    n = 1
     
