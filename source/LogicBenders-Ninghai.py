@@ -108,7 +108,7 @@ class BusInfo(object):
 
 
 # This class restores the results of planning master problem
-class ResultPlanning(object):
+class ResultMasterMILP(object):
     def __init__(self,model,Para,x_line,x_conv,x_sub,x_gen,y_line,
                  obj_con,obj_opr):
         # Variables
@@ -125,10 +125,11 @@ class ResultPlanning(object):
 
 
 # This class restores the results of reconfiguration worker-problem
-class ResultReconfig(object):
+class ResultWorkerLP(object):
     def __init__(self,model,Para,Var,N_con):
         # Saving objective
         self.obj = (model.getObjective()).getValue()
+        '''
         # Saving variables
         var = GurobiValue(Var)
         self.V_bus  = var[N_V_bus  : N_V_bus  + Para.N_bus, :]
@@ -141,6 +142,7 @@ class ResultReconfig(object):
         self.C_load = var[N_C_load : N_C_load + Para.N_bus ,:]
         self.S_gen  = var[N_S_gen  : N_S_gen  + Para.N_gen ,:]
         self.C_gen  = var[N_C_gen  : N_C_gen  + Para.N_gen ,:]
+        '''
         # Saving dual information
         constr = model.getConstrs()
         dual = [constr[n].pi  for n in range(N_con[-2],N_con[-1])]
@@ -186,8 +188,8 @@ class PlotFunc(object):
         x_conv = Res.x_conv[:,t]
         self.Plot_Figure(Para,y_line,x_conv)
     def Plot_Figure(self,Para,Line,Conv):
-        x = Para.Bus[:,2]
-        y = Para.Bus[:,3]
+        x = (Para.Bus[:,2]).copy()
+        y = (Para.Bus[:,3]).copy()
         for n in range(Para.N_bus):  # Bus
             if Para.Bus[n,7] == 1:
                 y[n] = y[n] - 150
@@ -292,7 +294,7 @@ def GurobiValue(var,string = 'continuous'):
     return matrix_var
 
 
-def Planning(Para,Info,Power):
+def MasterMILP(Para,Info,power):
     #
     # minimize
     #       Investment costs of line, converter, substation and
@@ -419,31 +421,31 @@ def Planning(Para,Info,Power):
                 model.addConstr(x_gen[n,t] == 0)
 
     # Benders cut
-    if len(Power) == 0:
+    if len(power) == 0:
         model.addConstr(obj_opr >= 0)
     else:
-        for i in range(len(Power)):
+        for i in range(len(power)):
             expr = LinExpr()
             for t in range(Para.N_stage):
                 for n in range(Para.N_line):
-                    expr = expr + Power[i].dual_x_line[n,t] * (x_line[n,t] - Power[i].x_line[n,t])
+                    expr = expr + power[i].dual_x_line[n,t] * (x_line[n,t] - power[i].x_line[n,t])
                 for n in range(Para.N_conv):
-                    expr = expr + Power[i].dual_x_conv[n,t] * (x_conv[n,t] - Power[i].x_conv[n,t])
+                    expr = expr + power[i].dual_x_conv[n,t] * (x_conv[n,t] - power[i].x_conv[n,t])
                 for n in range(Para.N_sub ):
-                    expr = expr + Power[i].dual_x_sub[n,t]  * (x_sub [n,t] - Power[i].x_sub [n,t])
+                    expr = expr + power[i].dual_x_sub[n,t]  * (x_sub [n,t] - power[i].x_sub [n,t])
                 for n in range(Para.N_gen ):
-                    expr = expr + Power[i].dual_x_gen[n,t]  * (x_gen [n,t] - Power[i].x_gen [n,t])
+                    expr = expr + power[i].dual_x_gen[n,t]  * (x_gen [n,t] - power[i].x_gen [n,t])
                 for s in range(Para.N_scene):
                     for n in range(Para.N_line):
-                        expr = expr + Power[i].dual_y_line[n,s,t] * (y_line[n,s,t] - Power[i].y_line[n,s,t])
-            model.addConstr(obj_opr >= Power[i].obj + expr)
+                        expr = expr + power[i].dual_y_line[n,s,t] * (y_line[n,s,t] - power[i].y_line[n,s,t])
+            model.addConstr(obj_opr >= power[i].obj + expr)
     
     # Optimize
     model.setObjective(obj_con + obj_opr, GRB.MINIMIZE)
-    model.setParam("MIPGap", 1e-2)
+    model.setParam("MIPGap", 0.1)
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,y_line,
+        result = ResultMasterMILP(model,Para,x_line,x_conv,x_sub,x_gen,y_line,
                                 obj_con,obj_opr)
     return result
    
@@ -460,7 +462,7 @@ def Reconfig(Para,Info,Result_Planning,s,t):
     # subject to
     #       1) Reconfiguration
     #       2) Radial topology
-    #       3) Optimal Power flow
+    #       3) Optimal power flow
     #       4) Upper and lower bound
     #
     # Scenario Data
@@ -514,8 +516,6 @@ def Reconfig(Para,Info,Result_Planning,s,t):
     model.setObjective(obj, GRB.MINIMIZE)
 
     # Set constraints
-    N_con = []  # indexing constraints
-
     for h in range(Para.N_hour):
         # 1.Active power balance equation
         for n in range(Para.N_bus):
@@ -645,7 +645,7 @@ def Reconfig(Para,Info,Result_Planning,s,t):
         for n in range(Para.N_bus):
             model.addConstr(Var[N_V_bus + n, h] >= Para.Voltage_low ** 2)
             model.addConstr(Var[N_V_bus + n, h] <= Para.Voltage_upp ** 2)
-        # 2) Power flow
+        # 2) power flow
         for n in range(Para.N_line):
             expr = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
             model.addConstr(Var[N_P_line + n, h] >= -y_line[n] * Para.Big_M)
@@ -690,27 +690,41 @@ def Reconfig(Para,Info,Result_Planning,s,t):
         for n in range(Para.N_gen):
             model.addConstr(Var[N_C_gen + n, h] >= 0)
             model.addConstr(Var[N_C_gen + n, h] <= Data_gen[n,h])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
-
-    # Equations
-    for n in range(Para.N_line):
-        model.addConstr(x_line[n] == Result_Planning.x_line[n,t])
-    for n in range(Para.N_conv):
-        model.addConstr(x_conv[n] == Result_Planning.x_conv[n,t])
-    for n in range(Para.N_sub):
-        model.addConstr(x_sub [n] == Result_Planning.x_sub [n,t])
-    for n in range(Para.N_gen):
-        model.addConstr(x_gen [n] == Result_Planning.x_gen [n,t])
-    for n in range(Para.N_line):
-        model.addConstr(y_line[n] == Result_Planning.y_line[n,s,t])
-    model.update()
-    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
     
+    model.update()
+    return model
+
+
+def WorkerLP(Para,Info,Result_Planning,ModelPool,s,t):
+    # Index
+    IND_x_line = 0
+    IND_x_conv = IND_x_line + Para.N_line
+    IND_x_sub  = IND_x_conv + Para.N_conv
+    IND_x_gen  = IND_x_sub  + Para.N_sub
+    IND_y_line = IND_x_gen  + Para.N_gen 
+    # Model formulation
+    model = ModelPool[t * Para.N_scene + s].copy()
+    model.update()
+    N_con = []
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
+    # Add constraints
+    var = model.getVars()
+    for n in range(Para.N_line):
+        model.addConstr(var[IND_x_line + n] == Result_Planning.x_line[n,t])
+    for n in range(Para.N_conv):
+        model.addConstr(var[IND_x_conv + n] == Result_Planning.x_conv[n,t])
+    for n in range(Para.N_sub):
+        model.addConstr(var[IND_x_sub  + n] == Result_Planning.x_sub [n,t])
+    for n in range(Para.N_gen):
+        model.addConstr(var[IND_x_gen  + n] == Result_Planning.x_gen [n,t])
+    for n in range(Para.N_line):
+        model.addConstr(var[IND_y_line + n] == Result_Planning.y_line[n,s,t])
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
     # Optimize
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultReconfig(model,Para,Var,N_con)
+        result = ResultWorkerLP(model,Para,var,N_con)
     return result
 
 
@@ -728,20 +742,26 @@ if __name__ == "__main__":
     lower_bound = []  #
     upper_bound = []  #
     # benders cut for power flow information
-    Logic = []
-    Power = []
+    logic = []
+    power = []
+    model = []
+    Plot  = PlotFunc(Para)
     # Iteration
     n_iter = 0  # index of iteration
     while True:
         # Master-problem
-        Result_Planning = Planning(Para,Info,Power)
+        Result_Planning = MasterMILP(Para,Info,power)
         # Worker-problem
         obj_opr = 0
         Benders_Info = BendersInfo(Para,Result_Planning)
+        if n_iter == 0:
+            for t in range(Para.N_stage):
+                for s in range(Para.N_scene):
+                    model.append(Reconfig(Para,Info,Result_Planning,s,t))
         for t in range(Para.N_stage):
             for s in range(Para.N_scene):
                 # Reconfiguration
-                Result_Reconfig = Reconfig(Para,Info,Result_Planning,s,t)
+                Result_Reconfig = WorkerLP(Para,Info,Result_Planning,model,s,t)
                 obj_opr = obj_opr + Result_Reconfig.obj
                 # Tranditional Benders cut information
                 Benders_Info.dual_x_line[:,t]  += Result_Reconfig.dual_x_line
@@ -750,12 +770,12 @@ if __name__ == "__main__":
                 Benders_Info.dual_x_gen [:,t]  += Result_Reconfig.dual_x_gen
                 Benders_Info.dual_y_line[:,s,t] = Result_Reconfig.dual_y_line
         Benders_Info.obj = obj_opr
-        Power.append(Benders_Info)
+        power.append(Benders_Info)
         # Updating lower and upper bound
         lower_bound.append(Result_Planning.obj)
         upper_bound.append(Result_Planning.obj_con + obj_opr)
         gap = (upper_bound[-1]-lower_bound[-1])/upper_bound[-1]
-        if gap <= 1e-2 or n_iter > 50:
+        if gap <= 1e-2 or n_iter > 1000:
             break
         else:
             n_iter = n_iter + 1
