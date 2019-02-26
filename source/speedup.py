@@ -792,7 +792,7 @@ if __name__ == "__main__":
         lower_bound.append(Result_Planning.obj)
         upper_bound.append(Result_Planning.obj_con + obj_opr)
         gap.append((upper_bound[-1]-lower_bound[-1])/upper_bound[-1])
-        if gap[-1] <= 1e-2 or n_iter > 50:
+        if gap[-1] <= 1e-2 or n_iter > 3000:
             break
         else:
             n_iter = n_iter + 1
