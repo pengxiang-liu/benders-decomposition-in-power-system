@@ -119,7 +119,7 @@ class ResultPlanning(object):
         self.y_line = GurobiValue(y_line,'integer')
         # Objective
         self.obj_con = obj_con.getValue()
-        self.obj_opr = obj_opr.x
+        self.obj_opr = obj_opr.getValue()
         self.obj = (model.getObjective()).getValue()
 
 
@@ -632,7 +632,7 @@ def Planning(Para,Info):
     
     # Optimize
     model.setObjective(obj_con + obj_opr, GRB.MINIMIZE)
-    model.setParam("MIPGap", 1e-2)
+    model.setParam("MIPGap", 0.05)
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
         result = ResultPlanning(model,Para,x_line,x_conv,x_sub,x_gen,y_line,
