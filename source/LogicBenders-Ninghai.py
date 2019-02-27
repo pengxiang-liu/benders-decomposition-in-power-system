@@ -144,12 +144,19 @@ class ResultMasterMILP(object):
 # This class restores the results of reconfiguration worker-problem
 class ResultWorkerLP(object):
     def __init__(self,model,Para,N_con):
-        # Saving objective
-        self.obj = (model.getObjective()).getValue()
-        # Saving operating variables
+        # Get all variables
         var = model.getVars()
-        opr = np.array([var[i].x for i in range(N_Index,len(var))])
-        opr = opr.reshape((N_Var,Para.N_hour),order='A')
+        var = np.array([var[i].x for i in range(len(var))])
+        # 
+        self.obj = (model.getObjective()).getValue()
+        # Saving reconfiguration variables
+        self.x_line = var[N_X_line : N_X_line + Para.N_line]
+        self.x_conv = var[N_X_conv : N_X_conv + Para.N_conv]
+        self.x_sub  = var[N_X_sub  : N_X_sub  + Para.N_sub ]
+        self.x_gen  = var[N_X_gen  : N_X_gen  + Para.N_gen ]
+        self.y_line = var[N_Y_line : N_Y_line + Para.N_line]
+        # Saving operating variables
+        opr = var[N_Index:].reshape((N_Var,Para.N_hour), order = 'A')
         self.V_bus  = opr[N_V_bus  : N_V_bus  + Para.N_bus , :]
         self.P_line = opr[N_P_line : N_P_line + Para.N_line, :]
         self.Q_line = opr[N_Q_line : N_Q_line + Para.N_line, :]
@@ -428,8 +435,14 @@ def createMasterMILP(Para,Info):
             for n in range(Para.N_line):
                 model.addConstr(y_pos[n,s,t] + y_neg[n,s,t] == y_line[n,s,t])
     
-    # Constraint 6 (renewable generation)
+    # Constraint 6 (given condition)
     for t in range(Para.N_stage):
+        for n in range(Para.N_line):
+            model.addConstr(x_line[n,t] == 1)
+        for n in range(Para.N_conv):
+            model.addConstr(x_conv[n,t] == 1)
+        for n in range(Para.N_sub):
+            model.addConstr(x_sub [n,t] == 0)
         for n in range(Para.N_gen):
             if t >= Para.Gen[n,5]:
                 model.addConstr(x_gen[n,t] == 1)
@@ -565,7 +578,7 @@ def createWorkerLP(Para,Info,s,t):
                 model.addConstr(expr == Data_load[n,h] * 0.0)
         
         # 3.Voltage balance on line
-        for n in range(Para.N_line):
+        for n in range(Para.N_line_AC):
             bus_head = Para.Line[n,1]
             bus_tail = Para.Line[n,2]
             expr = LinExpr()
@@ -730,6 +743,8 @@ def BendersCut(model,where):
                 d_x_gen [:,t] = d_x_gen [:,t] + result.d_x_gen
                 d_y_line[:,s,t] = result.d_y_line
                 d_object = d_object + result.obj
+        # Test
+        plot.Plot_Figure(Para,result.y_line,result.x_conv)
         # Formulate Benders cut
         i = 0  # index of variables
         c = d_object  # constant
@@ -786,7 +801,6 @@ def BendersDSEP(MasterMILP,WorkerPool):
                          x_sub  = result.x_sub ,
                          x_gen  = result.x_gen )
         # Figure
-        plot = PlotFunc(Para)
         plot.Planning(Para,result,2)
         plot.Reconfig(Para,result,2,2)
     else:
@@ -804,6 +818,7 @@ if __name__ == "__main__":
     Data = ReadData(filename)  # data
     Para = Parameter(Data)  # system parameter
     Info = BusInfo(Para)  # bus information
+    plot = PlotFunc(Para)  # figure
     Indexing(Para)  # formulating global parameters
 
     # Create model
