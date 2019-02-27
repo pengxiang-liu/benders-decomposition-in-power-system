@@ -118,32 +118,48 @@ class ResultMasterMILP(object):
         y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
         for n in range(Para.N_line):
             for t in range(Para.N_stage):
-                x_line[n,t] = variable.pop(0)
+                x_line[n,t] = int(round(variable.pop(0)))
         for n in range(Para.N_conv):
             for t in range(Para.N_stage):
-                x_conv[n,t] = variable.pop(0)
+                x_conv[n,t] = int(round(variable.pop(0)))
         for n in range(Para.N_sub ):
             for t in range(Para.N_stage):
-                x_sub [n,t] = variable.pop(0)
+                x_sub [n,t] = int(round(variable.pop(0)))
         for n in range(Para.N_gen ):
             for t in range(Para.N_stage):
-                x_gen [n,t] = variable.pop(0)
+                x_gen [n,t] = int(round(variable.pop(0)))
         for n in range(Para.N_line):
             for s in range(Para.N_scene):
                 for t in range(Para.N_stage):
-                    y_line[n,s,t] = variable.pop(0)
+                    y_line[n,s,t] = int(round(variable.pop(0)))
         self.x_line = x_line
         self.x_conv = x_conv
         self.x_sub  = x_sub
         self.x_gen  = x_gen
         self.y_line = y_line
+        self.obj_con = variable[-2]
+        self.obj_opr = variable[-1]
 
 
 # This class restores the results of reconfiguration worker-problem
 class ResultWorkerLP(object):
-    def __init__(self,model,Para,Var,N_con):
+    def __init__(self,model,Para,N_con):
         # Saving objective
         self.obj = (model.getObjective()).getValue()
+        # Saving operating variables
+        var = model.getVars()
+        opr = np.array([var[i].x for i in range(N_Index,len(var))])
+        opr = opr.reshape((N_Var,Para.N_hour),order='A')
+        self.V_bus  = opr[N_V_bus  : N_V_bus  + Para.N_bus , :]
+        self.P_line = opr[N_P_line : N_P_line + Para.N_line, :]
+        self.Q_line = opr[N_Q_line : N_Q_line + Para.N_line, :]
+        self.P_conv = opr[N_P_conv : N_P_conv + Para.N_conv, :]
+        self.Q_conv = opr[N_Q_conv : N_Q_conv + Para.N_conv, :]
+        self.P_sub  = opr[N_P_sub  : N_P_sub  + Para.N_sub , :]
+        self.Q_sub  = opr[N_Q_sub  : N_Q_sub  + Para.N_sub , :]
+        self.C_load = opr[N_C_load : N_C_load + Para.N_bus , :]
+        self.S_gen  = opr[N_S_gen  : N_S_gen  + Para.N_gen , :]
+        self.C_gen  = opr[N_C_gen  : N_C_gen  + Para.N_gen , :]
         # Saving dual information
         constr = model.getConstrs()
         dual = [constr[n].pi  for n in range(N_con[-2],N_con[-1])]
@@ -171,6 +187,45 @@ class BendersInfo(object):
         self.d_y_line = np.zeros((Para.N_line, Para.N_scene, Para.N_stage))
         # Objective
         self.obj = 0
+
+
+# This function input data from Excel files. The filtname can be changed 
+# to other power system for further study
+#
+def ReadData(filename):
+    Data_origin = []
+    readbook = xlrd.open_workbook(filename)
+    # Data preprocessing
+    for i in range(6):  # sheet number
+        sheet = readbook.sheet_by_index(i)
+        n_row = sheet.nrows
+        n_col = sheet.ncols
+        Coordinate = [1,n_row,0,n_col]  # coordinate of slice
+        Data_temp = sheet._cell_values  # data in the Excel file
+        Data_origin.append(np.array(Matrix_slice(Data_temp,Coordinate)))
+    return Data_origin
+
+
+# This function slice the matrix for easy operation
+#
+def Matrix_slice(Matrix,Coordinate):
+    row_start = Coordinate[0]
+    row_end   = Coordinate[1]
+    col_start = Coordinate[2]
+    col_end   = Coordinate[3]
+    Matrix_partitioned = []  # A partitioned matrix
+    for i in range(row_end-row_start):
+        Matrix_partitioned.append([])
+        for j in range(col_end-col_start):
+            Matrix_partitioned[i].append(Matrix[row_start+i][col_start+j])
+    return Matrix_partitioned
+
+
+# This function creates a depreciation calculator
+#
+def Depreciation(life,rate):
+    recovery = rate*((1+rate)**life)/((1+rate)**life-1)
+    return recovery
 
 
 # This class restores the 'plot' function
@@ -222,54 +277,16 @@ class PlotFunc(object):
         plt.show()
 
 
-# This function input data from Excel files. The filtname can be changed 
-# to other power system for further study
-#
-def ReadData(filename):
-    Data_origin = []
-    readbook = xlrd.open_workbook(filename)
-    # Data preprocessing
-    for i in range(6):  # sheet number
-        sheet = readbook.sheet_by_index(i)
-        n_row = sheet.nrows
-        n_col = sheet.ncols
-        Coordinate = [1,n_row,0,n_col]  # coordinate of slice
-        Data_temp = sheet._cell_values  # data in the Excel file
-        Data_origin.append(np.array(Matrix_slice(Data_temp,Coordinate)))
-    return Data_origin
-
-
-# This function slice the matrix for easy operation
-#
-def Matrix_slice(Matrix,Coordinate):
-    row_start = Coordinate[0]
-    row_end   = Coordinate[1]
-    col_start = Coordinate[2]
-    col_end   = Coordinate[3]
-    Matrix_partitioned = []  # A partitioned matrix
-    for i in range(row_end-row_start):
-        Matrix_partitioned.append([])
-        for j in range(col_end-col_start):
-            Matrix_partitioned[i].append(Matrix[row_start+i][col_start+j])
-    return Matrix_partitioned
-
-
-# This function creates a depreciation calculator
-#
-def Depreciation(life,rate):
-    recovery = rate*((1+rate)**life)/((1+rate)**life-1)
-    return recovery
-
-
 # This function...
 def Indexing(Para):
     # Master varibales
-    global N_X_line, N_X_conv, N_X_sub, N_X_gen, N_Y_line
+    global N_X_line, N_X_conv, N_X_sub, N_X_gen, N_Y_line, N_Index
     N_X_line = 0
     N_X_conv = N_X_line + Para.N_line
     N_X_sub  = N_X_conv + Para.N_conv
     N_X_gen  = N_X_sub  + Para.N_sub
-    N_Y_line = N_X_gen  + Para.N_gen 
+    N_Y_line = N_X_gen  + Para.N_gen
+    N_Index  = N_Y_line + Para.N_line
     # Operating variables
     global N_V_bus, N_P_line, N_Q_line, N_P_conv, N_Q_conv
     global N_P_sub, N_Q_sub,  N_C_load, N_S_gen,  N_C_gen,  N_Var
@@ -313,24 +330,26 @@ def createMasterMILP(Para,Info):
     f_gen  = model.addVars(Para.N_gen,  Para.N_scene, Para.N_stage, lb = -1e2)
     f_sub  = model.addVars(Para.N_sub,  Para.N_scene, Para.N_stage, lb = -1e2)
     # Projected operating costs
+    obj_con = model.addVar()
     obj_opr = model.addVar()
 
     model.update()
 
     # Set objective
-    obj_con = LinExpr()
+    cost_con = LinExpr()
     for t in range(Para.N_stage):
         RR = 0  # Reconvery rate in 5 years
         for y in range(Para.N_year):
             RR = RR + (1 + Para.Int_rate) ** (-(t * Para.N_year + y + 1))
         for n in range(Para.N_line):  # line
-            obj_con = obj_con + RR * x_line[n,t] * Para.Line[n][8] * Para.Dep_line
+            cost_con = cost_con + RR * x_line[n,t] * Para.Line[n][8] * Para.Dep_line
         for n in range(Para.N_conv):  # converter
-            obj_con = obj_con + RR * x_conv[n,t] * Para.Conv[n][4] * Para.Dep_conv
+            cost_con = cost_con + RR * x_conv[n,t] * Para.Conv[n][4] * Para.Dep_conv
         for n in range(Para.N_sub):  # substation
-            obj_con = obj_con + RR * x_sub [n,t] * Para.Sub [n][4] * Para.Dep_sub
+            cost_con = cost_con + RR * x_sub [n,t] * Para.Sub [n][4] * Para.Dep_sub
         for n in range(Para.N_gen):  # renewables generation
-            obj_con = obj_con + RR * x_gen [n,t] * Para.Gen [n][3] * Para.Dep_gen
+            cost_con = cost_con + RR * x_gen [n,t] * Para.Gen [n][3] * Para.Dep_gen
+    model.addConstr(obj_con == cost_con)
 
     # Constraint 1 (installation)
     for t in range(Para.N_stage-1):
@@ -346,7 +365,10 @@ def createMasterMILP(Para,Info):
                 if Para.Line[n,6] > 0:  # existing line
                     model.addConstr(y_line[n,s,t] <= 1)
                 else:  # expandable line
-                    model.addConstr(y_line[n,s,t] <= x_line[n,t])
+                    if Para.Line[n,9] == 0:  # AC line
+                        model.addConstr(y_line[n,s,t] <= x_line[n,t])
+                    if Para.Line[n,9] == 1:  # DC line
+                        model.addConstr(y_line[n,s,t] == x_line[n,t])
     
     # Constraint 3 (fictitious power flow initialization)
     for t in range(Para.N_stage):
@@ -438,7 +460,7 @@ def createWorkerLP(Para,Info,s,t):
 
     # Display
     number = t * Para.N_scene + s
-    print('Formulating No.%d model' % number)
+    print('Formulating No.%d' % number)
     # Scenario Data
     Data_gen  = np.zeros((Para.N_gen,Para.N_hour))
     Data_load = np.zeros((Para.N_bus,Para.N_hour))
@@ -680,7 +702,7 @@ def WorkerLP(Para,Info,Res_Master,WorkerPool,s,t):
     model.Params.OutputFlag = 0  # turn off the display
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
-        result = ResultWorkerLP(model,Para,var,N_con)
+        result = ResultWorkerLP(model,Para,N_con)
     return result
 
 
@@ -749,13 +771,20 @@ def BendersDSEP(MasterMILP,WorkerPool):
     # Set parameters
     model.Params.lazyConstraints = 1
     model.Params.MIPGap = 0.1
-    model.Params.TimeLimit = 21600  # 6 hours
+    model.Params.TimeLimit = 36000  # 6 hours
     # Optimize
     model.optimize(BendersCut)
     # Result
     if model.status == GRB.Status.OPTIMAL:
-        variable = (model._vars).x
+        variable = [(model._vars[i]).x for i in range(len(model._vars))]
         result = ResultMasterMILP(model,Para,variable)
+        # Save result
+        localtime = time.asctime(time.localtime(time.time()))
+        string = "Result + ", localtime
+        np.savez(string, x_line = result.x_line,
+                         x_conv = result.x_conv,
+                         x_sub  = result.x_sub ,
+                         x_gen  = result.x_gen )
         # Figure
         plot = PlotFunc(Para)
         plot.Planning(Para,result,2)
