@@ -2,12 +2,10 @@
 #
 # Copyright 2019, Southeast University, Liu Pengxiang
 #
-# A distribution system planning model using Logic-Benders decomposition
+# A distribution system planning model using Benders decomposition
 # 
 # This project develops a multi-stage planning model for AC-DC distribution 
-# system in Zhejiang province, China. A logic-based Benders decomposition 
-# algorithm is developed to deal with the integer variables in the 
-# Master-problem
+# system in Zhejiang province, China.
 
 
 import sys
@@ -60,6 +58,7 @@ class Parameter(object):
         self.Line_R = self.Line[:,4]
         self.Line_X = self.Line[:,5]
         self.Line_S = self.Line[:,6:8]
+        self.Line_S_max = (self.Line_S).sum(axis = 1)
         self.Dep_line = Depreciation(25,self.Int_rate)
         # Converter station
         self.Conv = Data[2]
@@ -380,42 +379,55 @@ def createMasterMILP(Para,Info):
     # Constraint 3 (fictitious power flow initialization)
     for t in range(Para.N_stage):
         for s in range(Para.N_scene):
-            for n in range(Para.N_bus):
-                if Para.Load[n,t] > 0:  # load bus
-                    model.addConstr(f_load[n,s,t] == 1)
-                else:  # none load bus
-                    model.addConstr(f_load[n,s,t] == 0)
+            # Select a scenario
+            Data_gen  = np.zeros(Para.N_gen)
+            Data_load = np.zeros(Para.N_bus)
+            index = s * Para.N_hour + 1
+            for n in range(Para.N_bus ):
+                Data_load[n] = Para.Load[n,t] * Para.Ty_load[index]
+            for n in range(Para.N_hour):
+                tp = int(Para.Gen[n,6])  # type of renewables
+                Data_gen [n] = Para.Gen [n,2] * Para.Ty_gen [index,tp]
+            # Initialize fictitious power flow
             for n in range(Para.N_line):
-                model.addConstr(f_line[n,s,t] >= -100 * y_line[n,s,t])
-                model.addConstr(f_line[n,s,t] <=  100 * y_line[n,s,t])
+                expr_0 = Para.Line_S[n,0] + x_line[n,t] * Para.Line_S[n,1]
+                expr_1 = y_line[n,s,t] * Para.Line_S_max[n]
+                model.addConstr(f_line[n,s,t] >= -expr_0)
+                model.addConstr(f_line[n,s,t] <=  expr_0)
+                model.addConstr(f_line[n,s,t] >= -expr_1)
+                model.addConstr(f_line[n,s,t] <=  expr_1)
             for n in range(Para.N_conv):
-                model.addConstr(f_conv[n,s,t] >= -100 * x_conv[n,t])
-                model.addConstr(f_conv[n,s,t] <=  100 * x_conv[n,t])
+                expr_0 = x_conv[n,t] * Para.Conv[n,3]
+                model.addConstr(f_conv[n,s,t] >= -expr_0)
+                model.addConstr(f_conv[n,s,t] <=  expr_0)
             for n in range(Para.N_sub):
+                expr_0 = Para.Sub_S[n,0] + x_sub[n,t] * Para.Sub_S[n,1]
                 model.addConstr(f_sub [n,s,t] >=  0)
-                model.addConstr(f_sub [n,s,t] <=  100)
+                model.addConstr(f_sub [n,s,t] <=  expr_0)
             for n in range(Para.N_gen):
-                model.addConstr(f_gen [n,s,t] ==  x_gen[n,t])
+                model.addConstr(f_gen [n,s,t] == x_gen[n,t] * Data_gen[n])
+            for n in range(Para.N_bus):
+                model.addConstr(f_load[n,s,t] == Data_load[n])
     
     # Constraint 4 (connectivity)
     for t in range(Para.N_stage):
         for s in range(Para.N_scene):
-            for i in range(Para.N_bus):
-                line_head = Info.Line_head[i]
-                line_tail = Info.Line_tail[i]
-                conv_head = Info.Conv_head[i]
-                conv_tail = Info.Conv_tail[i]
+            for n in range(Para.N_bus):
+                line_head = Info.Line_head[n]
+                line_tail = Info.Line_tail[n]
+                conv_head = Info.Conv_head[n]
+                conv_tail = Info.Conv_tail[n]
                 expr = LinExpr()
-                expr = expr + f_load[i,s,t]
-                expr = expr + quicksum(f_line[n,s,t] for n in line_head)
-                expr = expr - quicksum(f_line[n,s,t] for n in line_tail)
-                expr = expr + quicksum(f_conv[n,s,t] for n in conv_head)
-                expr = expr - quicksum(f_conv[n,s,t] for n in conv_tail)
-                if i in Para.Sub[:,1]:
-                    bus_no = int(np.where(i == Para.Sub[:,1])[0])
-                    expr = expr - f_sub[bus_no,s,t]
-                if i in Para.Gen[:,1]:
-                    bus_no = int(np.where(i == Para.Gen[:,1])[0])
+                expr = expr - f_load[n,s,t]
+                expr = expr - quicksum(f_line[i,s,t] for i in line_head)
+                expr = expr + quicksum(f_line[i,s,t] for i in line_tail)
+                expr = expr - quicksum(f_conv[i,s,t] for i in conv_head)
+                expr = expr + quicksum(f_conv[i,s,t] for i in conv_tail)
+                if n in Para.Sub[:,1]:
+                    bus_no = int(np.where(n == Para.Sub[:,1])[0])
+                    expr = expr + f_sub[bus_no,s,t]
+                if n in Para.Gen[:,1]:
+                    bus_no = int(np.where(n == Para.Gen[:,1])[0])
                     expr = expr + f_gen[bus_no,s,t]
                 model.addConstr(expr == 0)
     
@@ -437,12 +449,16 @@ def createMasterMILP(Para,Info):
     
     # Constraint 6 (given condition)
     for t in range(Para.N_stage):
+        '''
         for n in range(Para.N_line):
             model.addConstr(x_line[n,t] == 1)
+        
         for n in range(Para.N_conv):
             model.addConstr(x_conv[n,t] == 1)
+        
         for n in range(Para.N_sub):
-            model.addConstr(x_sub [n,t] == 0)
+            model.addConstr(x_sub [n,t] == 1)
+        '''
         for n in range(Para.N_gen):
             if t >= Para.Gen[n,5]:
                 model.addConstr(x_gen[n,t] == 1)
@@ -502,7 +518,7 @@ def createWorkerLP(Para,Info,s,t):
     for h in range(Para.N_hour):
         for n in range(Para.N_sub):
             obj = obj + Var[N_P_sub  + n, h] * Para.Cost_load
-            obj = obj + Var[N_Q_sub  + n, h] * Para.Cost_load
+            #obj = obj + Var[N_Q_sub  + n, h] * Para.Cost_load
         for n in range(Para.N_gen):
             obj = obj + Var[N_S_gen  + n, h] * Para.Cost_gen
             obj = obj + Var[N_C_gen  + n, h] * Para.Cost_cutgen
@@ -578,7 +594,7 @@ def createWorkerLP(Para,Info,s,t):
                 model.addConstr(expr == Data_load[n,h] * 0.0)
         
         # 3.Voltage balance on line
-        for n in range(Para.N_line_AC):
+        for n in range(Para.N_line):
             bus_head = Para.Line[n,1]
             bus_tail = Para.Line[n,2]
             expr = LinExpr()
@@ -602,15 +618,15 @@ def createWorkerLP(Para,Info,s,t):
             expr_1 = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
             model.addConstr(expr_0 >= -1.414 * expr_1)
             model.addConstr(expr_0 <=  1.414 * expr_1)
-            model.addConstr(expr_0 >= -1.414 * Para.Big_M * y_line[n])
-            model.addConstr(expr_0 <=  1.414 * Para.Big_M * y_line[n])
+            model.addConstr(expr_0 >= -1.414 * y_line[n] * Para.Line_S_max[n])
+            model.addConstr(expr_0 <=  1.414 * y_line[n] * Para.Line_S_max[n])
         for n in range(Para.N_line):
             expr_0 = Var[N_P_line + n, h] - Var[N_Q_line + n, h]
             expr_1 = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
             model.addConstr(expr_0 >= -1.414 * expr_1)
             model.addConstr(expr_0 <=  1.414 * expr_1)
-            model.addConstr(expr_0 >= -1.414 * Para.Big_M * y_line[n])
-            model.addConstr(expr_0 <=  1.414 * Para.Big_M * y_line[n])
+            model.addConstr(expr_0 >= -1.414 * y_line[n] * Para.Line_S_max[n])
+            model.addConstr(expr_0 <=  1.414 * y_line[n] * Para.Line_S_max[n])
         
         # 6.Linearization of quadratic terms in converter equations
         for n in range(Para.N_conv):
@@ -644,15 +660,15 @@ def createWorkerLP(Para,Info,s,t):
         # 2) power flow
         for n in range(Para.N_line):
             expr = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
-            model.addConstr(Var[N_P_line + n, h] >= -y_line[n] * Para.Big_M)
-            model.addConstr(Var[N_P_line + n, h] <=  y_line[n] * Para.Big_M)
+            model.addConstr(Var[N_P_line + n, h] >= -y_line[n] * Para.Line_S_max[n])
+            model.addConstr(Var[N_P_line + n, h] <=  y_line[n] * Para.Line_S_max[n])
             model.addConstr(Var[N_P_line + n, h] >= -expr)
             model.addConstr(Var[N_P_line + n, h] <=  expr)
         for n in range(Para.N_line):
             if Para.Line[n,9] == 0:
                 expr = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
-                model.addConstr(Var[N_Q_line + n, h] >= -y_line[n] * Para.Big_M)
-                model.addConstr(Var[N_Q_line + n, h] <=  y_line[n] * Para.Big_M)
+                model.addConstr(Var[N_Q_line + n, h] >= -y_line[n] * Para.Line_S_max[n])
+                model.addConstr(Var[N_Q_line + n, h] <=  y_line[n] * Para.Line_S_max[n])
                 model.addConstr(Var[N_Q_line + n, h] >= -expr)
                 model.addConstr(Var[N_Q_line + n, h] <=  expr)
             if Para.Line[n,9] == 1:
@@ -690,6 +706,9 @@ def createWorkerLP(Para,Info,s,t):
     return model
 
 
+# This function creates the worker linear programming model for each
+# given scenario
+#
 def WorkerLP(Para,Info,Res_Master,WorkerPool,s,t):
     # Model formulation
     model = WorkerPool[t * Para.N_scene + s].copy()
@@ -719,7 +738,9 @@ def WorkerLP(Para,Info,Res_Master,WorkerPool,s,t):
     return result
 
 
-# This function...
+# This function adds Benders cut to the master problem once an
+# incumbent solution is found
+#
 def BendersCut(model,where):
     if where == GRB.Callback.MIPSOL:
         # Incumbent solutions
@@ -743,8 +764,6 @@ def BendersCut(model,where):
                 d_x_gen [:,t] = d_x_gen [:,t] + result.d_x_gen
                 d_y_line[:,s,t] = result.d_y_line
                 d_object = d_object + result.obj
-        # Test
-        plot.Plot_Figure(Para,result.y_line,result.x_conv)
         # Formulate Benders cut
         i = 0  # index of variables
         c = d_object  # constant
@@ -778,14 +797,15 @@ def BendersCut(model,where):
         model.cbLazy(model._vars[-1] >= expr + c)
 
 
-# This function...
+# This function creates the DSEP model using benders decomposition
+#
 def BendersDSEP(MasterMILP,WorkerPool):
     # Copy
     model = MasterMILP.copy()
     model._vars = model.getVars()
     # Set parameters
     model.Params.lazyConstraints = 1
-    model.Params.MIPGap = 0.1
+    model.Params.MIPGap = 0.05
     model.Params.TimeLimit = 36000  # 6 hours
     # Optimize
     model.optimize(BendersCut)
@@ -794,12 +814,8 @@ def BendersDSEP(MasterMILP,WorkerPool):
         variable = [(model._vars[i]).x for i in range(len(model._vars))]
         result = ResultMasterMILP(model,Para,variable)
         # Save result
-        localtime = time.asctime(time.localtime(time.time()))
-        string = "Result + ", localtime
-        np.savez(string, x_line = result.x_line,
-                         x_conv = result.x_conv,
-                         x_sub  = result.x_sub ,
-                         x_gen  = result.x_gen )
+        # ...
+        # ...
         # Figure
         plot.Planning(Para,result,2)
         plot.Reconfig(Para,result,2,2)

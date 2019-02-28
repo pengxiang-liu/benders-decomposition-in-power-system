@@ -354,7 +354,6 @@ def Planning(Para,Info):
             for h in range(Para.N_hour):
                 for n in range(Para.N_sub):
                     obj_opr = obj_opr + Var[N_P_sub  + n,h,s,t] * Para.Cost_load * Para.N_time
-                    obj_opr = obj_opr + Var[N_Q_sub  + n,h,s,t] * Para.Cost_load * Para.N_time
                 for n in range(Para.N_gen):
                     obj_opr = obj_opr + Var[N_S_gen  + n,h,s,t] * Para.Cost_gen * Para.N_time
                     obj_opr = obj_opr + Var[N_C_gen  + n,h,s,t] * Para.Cost_cutgen * Para.N_time
@@ -375,7 +374,10 @@ def Planning(Para,Info):
                 if Para.Line[n,6] > 0:  # existing line
                     model.addConstr(y_line[n,s,t] <= 1)
                 else:  # expandable line
-                    model.addConstr(y_line[n,s,t] <= x_line[n,t])
+                    if Para.Line[n,9] == 0:  # AC line
+                        model.addConstr(y_line[n,s,t] <= x_line[n,t])
+                    if Para.Line[n,9] == 1:  # DC line
+                        model.addConstr(y_line[n,s,t] == x_line[n,t])
     
     # Constraint 3 (fictitious power flow initialization)
     for t in range(Para.N_stage):
