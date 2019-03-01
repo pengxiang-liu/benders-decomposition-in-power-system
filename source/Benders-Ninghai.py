@@ -9,6 +9,7 @@
 
 
 import sys
+import csv
 import math
 import xlrd
 import time
@@ -735,7 +736,16 @@ def WorkerLP(Para,Info,Res_Master,WorkerPool,s,t):
     model.optimize()
     if model.status == GRB.Status.OPTIMAL:
         result = ResultWorkerLP(model,Para,N_con)
-    return result
+        return result
+    else:
+        with open('result.csv', 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(Res_Master.x_line.tolist())
+            writer.writerows(Res_Master.x_conv.tolist())
+            writer.writerows(Res_Master.x_sub .tolist())
+            writer.writerows(Res_Master.x_gen .tolist())
+            writer.writerows(Res_Master.y_line[:,s,:].tolist())
+        return 0
 
 
 # This function adds Benders cut to the master problem once an
@@ -805,7 +815,7 @@ def BendersDSEP(MasterMILP,WorkerPool):
     model._vars = model.getVars()
     # Set parameters
     model.Params.lazyConstraints = 1
-    model.Params.MIPGap = 0.05
+    model.Params.MIPGap = 0.01
     model.Params.TimeLimit = 36000  # 6 hours
     # Optimize
     model.optimize(BendersCut)
