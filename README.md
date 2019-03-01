@@ -1,20 +1,15 @@
-# LogicBenders
-A distribution system planning model using logic-based Benders decomposition
-NOTE: This project is still under development...
+# Benders-DSEP
+A distribution system planning model using modern Benders decomposition
+
 
 # Introduction
 1. Distribution system planning
 
-This project develops a multistage planning model for distribution system where investments in the distribution network and distributed generations are jointly considered. The planning model is decomposed into three layers, i.e. installation, reconfiguration and operation. 
+This project develops a multistage planning model for distribution system where investments in the distribution network and distributed generations are jointly considered. The model is the planning model is applied to a real distribution system in Zhejiang province, China
 
-2. Logic-based Benders decomposition
+2. Modern Benders decomposition
 
-Note that the proposed planning model is a complicated mixed-integer programming (MIP), which is hard to solve, even for the state-of-the-art commercial solver such as CPLEX and GUROBI. Therefore, Benders decomposition is used. The master problem determines the optimal installation plans, while the sub-problem minimizes the costs of reconfiguration and operation at each scenario.
+The original Benders decomposition from the ‘60s uses two distinct ingredients for solving a Mixed-Integer Linear Program (MILP)
 
-One of the most serious problem is that sub-problem contains integer variables. The traditional approach is to relax these variables under a nested Benders decomposition structure. However, the relaxation weakens the effectiveness of Benders cut and makes the problem hard to converge.
+The modern Benders decomposition uses callback functions in the modern commercial solvers such as IBM ILOG Cplex, Gurobi, XPRESS etc. Callback functions are just entry points in the Branch-and-cut code where an advanced user (you!) can add his/her customizations. The main advantage of the callback approach is that it is likely to avoid considerable rework. In the original approach, each time you add a cut to the master problem, you have to solve it anew. Although the new cuts may change the structure of the solution tree (by changing the solver's branching decisions), you are probably going to spend time revisiting candidate solutions that you had already eliminated earlier. Moreover, you may actually encounter the optimal solution to the original problem and then discard it, because a superoptimal solution that is either infeasible in the original problem or has an artificially superior value, causes the true optimum to appear suboptimal. With the callback approach, you use a single search tree, never revisit a node, and never overlook a truly superior solution.
 
-In this context, a logic-based Benders decomposition algorithm is developed to solve the problem.
-
-# Reference
-
-[1] J.N. Hooker, G. Ottosson, "Logic-based Benders decomposition," Mathematical Programming, no.96 vol.1 pp.33-60
