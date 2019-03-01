@@ -1,5 +1,5 @@
 # Benders-DSEP
-A distribution system planning model using modern Benders decomposition. This project develops a multistage planning model for distribution system where investments in the distribution network and distributed generations are jointly considered. The model is the planning model is applied to a real distribution system in Zhejiang province, China.
+A distribution system planning model using modern Benders decomposition. This project develops a multistage planning model for distribution system where investments in the distribution network and distributed generations are jointly considered. The model is applied to a real distribution system in Zhejiang province, China.
 
 
 # Introduction
