@@ -834,6 +834,257 @@ def BendersDSEP(MasterMILP,WorkerPool):
     return result
 
 
+def debugWorkerLP(Para,Info,s,t):
+    #
+    # minimize
+    #       Costs of power purchasing, load shedding, renewables generation
+    #       and curtailment 
+    # subject to
+    #       1) Reconfiguration
+    #       2) Radial topology
+    #       3) Optimal power flow
+    #       4) Upper and lower bound
+    #
+
+    # Display
+    number = t * Para.N_scene + s
+    print('Formulating No.%d' % number)
+    # Scenario Data
+    Data_gen  = np.zeros((Para.N_gen,Para.N_hour))
+    Data_load = np.zeros((Para.N_bus,Para.N_hour))
+    for h in range(Para.N_hour):
+        index_hour = s * Para.N_hour + h
+        for n in range(Para.N_bus):
+            Data_load[n,h] = Para.Load[n,t] * Para.Ty_load[index_hour]
+        for n in range(Para.N_gen):
+            gen_type = int(Para.Gen[n,6])  # type of renewables
+            Data_gen [n,h] = Para.Gen [n,2] * Para.Ty_gen [index_hour,gen_type]
+
+    # Model
+    model = Model()
+
+    # Create reconfiguration variables
+    x_line = model.addVars(Para.N_line)  # line
+    x_conv = model.addVars(Para.N_conv)  # converter
+    x_sub  = model.addVars(Para.N_sub)   # substation
+    x_gen  = model.addVars(Para.N_gen)   # renewables
+    y_line = model.addVars(Para.N_line)  # reconfiguration
+    # Create power flow variables
+    Var = model.addVars(N_Var, Para.N_hour, lb = -GRB.INFINITY)
+
+    # Set objective
+    obj = LinExpr()
+    for h in range(Para.N_hour):
+        for n in range(Para.N_sub):
+            obj = obj + Var[N_P_sub  + n, h] * Para.Cost_load
+            #obj = obj + Var[N_Q_sub  + n, h] * Para.Cost_load
+        for n in range(Para.N_gen):
+            obj = obj + Var[N_S_gen  + n, h] * Para.Cost_gen
+            obj = obj + Var[N_C_gen  + n, h] * Para.Cost_cutgen
+        for n in range(Para.N_bus):
+            obj = obj + Var[N_C_load + n, h] * Para.Cost_cutload
+    obj = obj * Para.N_time  # number of times in a year
+    model.setObjective(obj, GRB.MINIMIZE)
+
+    # Set constraints
+    for h in range(Para.N_hour):
+        # 1.Active power balance equation
+        for n in range(Para.N_bus):
+            # Bus-Branch information
+            line_head = Info.Line_head[n]
+            line_tail = Info.Line_tail[n]
+            conv_head = Info.Conv_head[n]
+            conv_tail = Info.Conv_tail[n]
+            # Formulate expression
+            expr = LinExpr()
+            expr = expr - quicksum(Var[N_P_line + i, h] for i in line_head)
+            expr = expr + quicksum(Var[N_P_line + i, h] for i in line_tail)
+            expr = expr - quicksum(Var[N_P_conv + i, h] for i in conv_head)
+            expr = expr + quicksum(Var[N_P_conv + i, h] for i in conv_tail)
+            if Para.Bus[n,7] == 0:  # AC bus
+                expr = expr + Var[N_C_load + n, h] * Para.Factor[0]
+            if Para.Bus[n,7] == 1:  # DC bus
+                expr = expr + Var[N_C_load + n, h] * 1.0
+            if n in Para.Sub[:,1]:
+                bus_no = int(np.where(n == Para.Sub[:,1])[0])
+                expr = expr + Var[N_P_sub + bus_no, h]
+            if n in Para.Gen[:,1]:
+                bus_no = int(np.where(n == Para.Gen[:,1])[0])
+                if Para.Gen[bus_no,6] == 1:
+                    expr = expr + Var[N_S_gen + bus_no, h] * 1.0
+                else:
+                    expr = expr + Var[N_S_gen + bus_no, h] * Para.Factor[0]
+            # Add constraint
+            if Para.Bus[n,7] == 0:  # AC bus
+                model.addConstr(expr == Data_load[n,h] * Para.Factor[0])
+            if Para.Bus[n,7] == 1:  # DC bus
+                model.addConstr(expr == Data_load[n,h] * 1.0)
+        
+        # 2.Reactive power balance equation
+        for n in range(Para.N_bus):
+            # Bus-Branch information
+            line_head = Info.Line_head[n]
+            line_tail = Info.Line_tail[n]
+            conv_head = Info.Conv_head[n]
+            conv_tail = Info.Conv_tail[n]
+            # Formulate expression
+            expr = LinExpr()
+            expr = expr - quicksum(Var[N_Q_line + i, h] for i in line_head)
+            expr = expr + quicksum(Var[N_Q_line + i, h] for i in line_tail)
+            if Para.Bus[n,7] == 0:  # AC bus
+                expr = expr - quicksum(Var[N_Q_conv + i, h] for i in conv_head)
+                expr = expr + quicksum(Var[N_Q_conv + i, h] for i in conv_tail)
+                expr = expr + Var[N_C_load + n, h] * Para.Factor[1]
+            if Para.Bus[n,7] == 1:  # DC bus
+                expr = expr + Var[N_C_load + n, h] * 0.0
+            if n in Para.Sub[:,1]:
+                bus_no = int(np.where(n == Para.Sub[:,1])[0])
+                expr = expr + Var[N_Q_sub + bus_no, h]
+            if n in Para.Gen[:,1]:
+                bus_no = int(np.where(n == Para.Gen[:,1])[0])
+                if Para.Gen[bus_no,6] == 1:
+                    expr = expr + Var[N_S_gen + bus_no, h] * 0.0
+                else:
+                    expr = expr + Var[N_S_gen + bus_no, h] * Para.Factor[1]
+            # Add constraint
+            if Para.Bus[n,7] == 0:  # AC bus
+                model.addConstr(expr == Data_load[n,h] * Para.Factor[1])
+            if Para.Bus[n,7] == 1:  # DC bus
+                model.addConstr(expr == Data_load[n,h] * 0.0)
+        
+        # 3.Voltage balance on line
+        for n in range(Para.N_line):
+            bus_head = Para.Line[n,1]
+            bus_tail = Para.Line[n,2]
+            expr = LinExpr()
+            expr = expr + Var[N_V_bus + bus_head, h]
+            expr = expr - Var[N_V_bus + bus_tail, h]
+            expr = expr - Var[N_P_line + n, h] * 2 * Para.Line_R[n]
+            expr = expr - Var[N_Q_line + n, h] * 2 * Para.Line_X[n]
+            model.addConstr(expr >= -Para.Big_M * (1 - y_line[n]))
+            model.addConstr(expr <=  Para.Big_M * (1 - y_line[n]))
+        
+        # 4.Renewable generation
+        for n in range(Para.N_gen):
+            expr = LinExpr()
+            expr = expr + Var[N_S_gen + n, h]
+            expr = expr + Var[N_C_gen + n, h]
+            model.addConstr(expr == x_gen[n] * Data_gen[n,h])
+        
+        # 5.Linearization of quadratic terms in line equations
+        for n in range(Para.N_line):
+            expr_0 = Var[N_P_line + n, h] + Var[N_Q_line + n, h]
+            expr_1 = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
+            model.addConstr(expr_0 >= -1.414 * expr_1)
+            model.addConstr(expr_0 <=  1.414 * expr_1)
+            model.addConstr(expr_0 >= -1.414 * y_line[n] * Para.Line_S_max[n])
+            model.addConstr(expr_0 <=  1.414 * y_line[n] * Para.Line_S_max[n])
+        for n in range(Para.N_line):
+            expr_0 = Var[N_P_line + n, h] - Var[N_Q_line + n, h]
+            expr_1 = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
+            model.addConstr(expr_0 >= -1.414 * expr_1)
+            model.addConstr(expr_0 <=  1.414 * expr_1)
+            model.addConstr(expr_0 >= -1.414 * y_line[n] * Para.Line_S_max[n])
+            model.addConstr(expr_0 <=  1.414 * y_line[n] * Para.Line_S_max[n])
+        
+        # 6.Linearization of quadratic terms in converter equations
+        for n in range(Para.N_conv):
+            expr_0 = Var[N_P_conv + n, h] + Var[N_Q_conv + n, h]
+            expr_1 = x_conv[n] * Para.Conv[n,3]
+            model.addConstr(expr_0 >= -1.414 * expr_1)
+            model.addConstr(expr_0 <=  1.414 * expr_1)
+        for n in range(Para.N_conv):
+            expr_0 = Var[N_P_conv + n, h] - Var[N_Q_conv + n, h]
+            expr_1 = x_conv[n] * Para.Conv[n,3]
+            model.addConstr(expr_0 >= -1.414 * expr_1)
+            model.addConstr(expr_0 <=  1.414 * expr_1)
+        
+        # 7.Linearization of quadratic terms in substation equations
+        for n in range(Para.N_sub):
+            expr_0 = Var[N_P_sub + n, h] + Var[N_Q_sub + n, h]
+            expr_1 = Para.Sub_S[n,0] + x_sub[n] * Para.Sub_S[n,1]
+            model.addConstr(expr_0 >= 0)
+            model.addConstr(expr_0 <= 1.414 * expr_1)
+        for n in range(Para.N_sub):
+            expr_0 = Var[N_P_sub + n, h] - Var[N_Q_sub + n, h]
+            expr_1 = Para.Sub_S[n,0] + x_sub[n] * Para.Sub_S[n,1]
+            model.addConstr(expr_0 >= 0)
+            model.addConstr(expr_0 <= 1.414 * expr_1)
+        
+        # 8.Bounds of variables
+        # 1) Voltage
+        for n in range(Para.N_bus):
+            model.addConstr(Var[N_V_bus + n, h] >= Para.Voltage_low ** 2)
+            model.addConstr(Var[N_V_bus + n, h] <= Para.Voltage_upp ** 2)
+        # 2) power flow
+        for n in range(Para.N_line):
+            expr = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
+            model.addConstr(Var[N_P_line + n, h] >= -y_line[n] * Para.Line_S_max[n])
+            model.addConstr(Var[N_P_line + n, h] <=  y_line[n] * Para.Line_S_max[n])
+            model.addConstr(Var[N_P_line + n, h] >= -expr)
+            model.addConstr(Var[N_P_line + n, h] <=  expr)
+        for n in range(Para.N_line):
+            if Para.Line[n,9] == 0:
+                expr = Para.Line_S[n,0] + x_line[n] * Para.Line_S[n,1]
+                model.addConstr(Var[N_Q_line + n, h] >= -y_line[n] * Para.Line_S_max[n])
+                model.addConstr(Var[N_Q_line + n, h] <=  y_line[n] * Para.Line_S_max[n])
+                model.addConstr(Var[N_Q_line + n, h] >= -expr)
+                model.addConstr(Var[N_Q_line + n, h] <=  expr)
+            if Para.Line[n,9] == 1:
+                model.addConstr(Var[N_Q_line + n, h] ==  0)
+        # 3) Converter
+        for n in range(Para.N_conv):
+            expr = x_conv[n] * Para.Conv[n,3]
+            model.addConstr(Var[N_P_conv + n, h] >= -expr)
+            model.addConstr(Var[N_P_conv + n, h] <=  expr)
+        for n in range(Para.N_conv):
+            expr = x_conv[n] * Para.Conv[n,3]
+            model.addConstr(Var[N_Q_conv + n, h] >= -expr)
+            model.addConstr(Var[N_Q_conv + n, h] <=  expr)
+        # 4) Substation
+        for n in range(Para.N_sub):
+            expr = Para.Sub_S[n,0] + x_sub[n] * Para.Sub_S[n,1]
+            model.addConstr(Var[N_P_sub + n, h] >= 0)
+            model.addConstr(Var[N_P_sub + n, h] <= expr)
+        for n in range(Para.N_sub):
+            expr = Para.Sub_S[n,0] + x_sub[n] * Para.Sub_S[n,1]
+            model.addConstr(Var[N_Q_sub + n, h] >= 0)
+            model.addConstr(Var[N_Q_sub + n, h] <= expr)
+        # 5) Load shedding
+        for n in range(Para.N_bus):
+            model.addConstr(Var[N_C_load + n, h] >= 0)
+            model.addConstr(Var[N_C_load + n, h] <= Data_load[n,h])
+        # 6) Renewables
+        for n in range(Para.N_gen):
+            model.addConstr(Var[N_S_gen + n, h] >= 0)
+            model.addConstr(Var[N_S_gen + n, h] <= Data_gen[n,h])
+        for n in range(Para.N_gen):
+            model.addConstr(Var[N_C_gen + n, h] >= 0)
+            model.addConstr(Var[N_C_gen + n, h] <= Data_gen[n,h])
+    
+    N_con = []
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
+    for n in range(Para.N_line):
+        model.addConstr(x_line[n] == res_x_line[n])
+    for n in range(Para.N_conv):
+        model.addConstr(x_conv[n] == res_x_conv[n])
+    for n in range(Para.N_sub ):
+        model.addConstr(x_sub[n]  == res_x_sub[n])
+    for n in range(Para.N_gen ):
+        model.addConstr(x_gen[n]  == res_x_gen[n])
+    for n in range(Para.N_line):
+        model.addConstr(y_line[n] == res_y_line[n])
+
+    model.update()
+    N_con.append(model.getAttr(GRB.Attr.NumConstrs))
+    # Optimize
+    model.optimize()
+    if model.status == GRB.Status.OPTIMAL:
+        result = ResultWorkerLP(model,Para,N_con)
+        return result
+    else:
+        return 0
+
 # Main function
 if __name__ == "__main__":
 
@@ -846,7 +1097,21 @@ if __name__ == "__main__":
     Info = BusInfo(Para)  # bus information
     plot = PlotFunc(Para)  # figure
     Indexing(Para)  # formulating global parameters
-
+    '''
+    with open('result.csv', newline='') as f:
+        reader = csv.reader(f)
+        temp = np.zeros(N_Index)
+        n = 0
+        for row in reader:
+            temp[n] = float(row[0])
+            n = n + 1
+        res_x_line = temp[N_X_line : N_X_line + Para.N_line]
+        res_x_conv = temp[N_X_conv : N_X_conv + Para.N_conv]
+        res_x_sub  = temp[N_X_sub  : N_X_sub  + Para.N_sub ]
+        res_x_gen  = temp[N_X_gen  : N_X_gen  + Para.N_gen ]
+        res_y_line = temp[N_Y_line : N_Y_line + Para.N_line]
+        res = debugWorkerLP(Para,Info,5,0)
+    '''
     # Create model
     MasterMILP = createMasterMILP(Para,Info)
     WorkerPool = []
@@ -859,3 +1124,5 @@ if __name__ == "__main__":
 
     time_end=time.time()
     print('totally cost',time_end-time_start)
+
+
