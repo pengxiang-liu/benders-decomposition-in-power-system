@@ -384,9 +384,9 @@ def createMasterMILP(Para,Info):
             Data_gen  = np.zeros(Para.N_gen)
             Data_load = np.zeros(Para.N_bus)
             index = s * Para.N_hour + 1
-            for n in range(Para.N_bus ):
+            for n in range(Para.N_bus):
                 Data_load[n] = Para.Load[n,t] * Para.Ty_load[index]
-            for n in range(Para.N_hour):
+            for n in range(Para.N_gen):
                 tp = int(Para.Gen[n,6])  # type of renewables
                 Data_gen [n] = Para.Gen [n,2] * Para.Ty_gen [index,tp]
             # Initialize fictitious power flow
