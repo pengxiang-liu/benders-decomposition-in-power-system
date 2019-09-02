@@ -2,12 +2,10 @@
 #
 # Copyright 2019, Southeast University, Liu Pengxiang
 #
-# A distribution system planning model using Logic-Benders decomposition
+# A distribution system planning model using traditional Gurobi Software
 # 
 # This project develops a multi-stage planning model for AC-DC distribution 
-# system in Zhejiang province, China. A logic-based Benders decomposition 
-# algorithm is developed to deal with the integer variables in the 
-# Master-problem
+# system in Zhejiang province, China. 
 
 
 import sys

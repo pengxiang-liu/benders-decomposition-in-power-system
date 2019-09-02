@@ -2,7 +2,7 @@
 #
 # Copyright 2019, Southeast University, Liu Pengxiang
 #
-# A distribution system planning model using Benders decomposition
+# A distribution system planning model using Modern Benders decomposition
 # 
 # This project develops a multi-stage planning model for AC-DC distribution 
 # system in Zhejiang province, China.
