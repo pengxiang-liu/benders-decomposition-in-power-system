@@ -1,9 +1,21 @@
-# Benders-DSEP
-A distribution system planning model using modern Benders decomposition. This project develops a multistage planning model for distribution system where investments in the distribution network and distributed generations are jointly considered. The model is applied to a real distribution system in Zhejiang province, China.
+# Power-Benders
 
+Application of Benders decomposition in power system.
 
-# Introduction
+## 1. Introduction
+***
+Benders decomposition (or Benders' decomposition) is a technique in mathematical programming that allows the solution of very large linear programming problems that have a special block structure. This block structure often occurs in applications such as stochastic programming as the uncertainty is usually represented with scenarios. Therefore, Benders decomposition has a wide range of applications in the field of power systems
 
-The original Benders decomposition from the ‘60s uses two distinct ingredients for solving a Mixed-Integer Linear Program (MILP). The modern Benders decomposition uses callback functions in the modern commercial solvers such as IBM ILOG Cplex, Gurobi, XPRESS etc. Callback functions are just entry points in the Branch-and-cut code where an advanced user (you!) can add his/her customizations.
+## 2. Our work
 
-The main advantage of the callback approach is that it is likely to avoid considerable rework. In the original approach, each time you add a cut to the master problem, you have to solve it anew. Although the new cuts may change the structure of the solution tree (by changing the solver's branching decisions), you are probably going to spend time revisiting candidate solutions that you had already eliminated earlier. Moreover, you may actually encounter the optimal solution to the original problem and then discard it, because a superoptimal solution that is either infeasible in the original problem or has an artificially superior value, causes the true optimum to appear suboptimal. With the callback approach, you use a single search tree, never revisit a node, and never overlook a truly superior solution.
+In this repository, we explore the application of Benders decomposition in
+the field of power systems.
+The first one is a hybrid AC-DC distribution system expansion planning model using modern Benders decomposition (see: DSEP-Ninghai.py).
+The seconde one is a dispatch and scheduling model for EV charging using logic-based Benders decomposition (see: EV-charging.py).
+We found that the use of Benders decomposition achieves 10 to 100 times acceleration in solving the model.
+
+## 3. Recommendation
+
+The best expert in the community of Benders decomposition: [Matteo Fischetti](http://www.dei.unipd.it/~fisch/).
+
+The inventor of logic-based Benders decomposition: [J. N. Hooker](https://www.cmu.edu/tepper/faculty-and-research/faculty-by-area/profiles/hooker-john.html).

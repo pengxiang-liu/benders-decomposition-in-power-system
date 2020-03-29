@@ -825,7 +825,7 @@ def BendersDSEP(MasterMILP,WorkerPool):
 if __name__ == "__main__":
 
     # Input parameter
-    filename = "data/Data-Ninghai.xlsx"  # file name
+    filename = "data/Real-Application/China-Zhejiang-Ninghai/Data.xlsx"  # file name
     Data = ReadData(filename)  # data
     Para = Parameter(Data)  # system parameter
     Info = BusInfo(Para)  # bus information
@@ -843,6 +843,7 @@ if __name__ == "__main__":
     Result_DSEP = BendersDSEP(MasterMILP,WorkerPool)
     
     # Save results
+    '''
     with open('result/result.csv', 'w', newline = '') as f:
         writer = csv.writer(f)
         writer.writerows(Result_DSEP.x_line.tolist())
@@ -854,4 +855,5 @@ if __name__ == "__main__":
     # Plot
     # plot.Planning(Para,Result_DSEP,2)
     # plot.Reconfig(Para,Result_DSEP,2,2)
+    '''
     
