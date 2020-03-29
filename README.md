@@ -3,7 +3,7 @@
 Application of Benders decomposition in power system.
 
 ## 1. Introduction
-***
+
 Benders decomposition (or Benders' decomposition) is a technique in mathematical programming that allows the solution of very large linear programming problems that have a special block structure. This block structure often occurs in applications such as stochastic programming as the uncertainty is usually represented with scenarios. Therefore, Benders decomposition has a wide range of applications in the field of power systems
 
 ## 2. Our work
